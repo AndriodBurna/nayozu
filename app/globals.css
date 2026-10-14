@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 3.9%;
+    --primary: 0 0% 9%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96.1%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 96.1%;
+    --muted-foreground: 0 0% 45.1%;
+    --accent: 0 0% 96.1%;
+    --accent-foreground: 0 0% 9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 89.8%;
+    --input: 0 0% 89.8%;
+    --ring: 0 0% 3.9%;
+    --radius: 0.5rem;
+  }
+  .dark {
+    --background: 225 85% 6%;   /* midnight navy #080D18 */
+    --foreground: 210 5% 98%;   /* soft-white text #F4F6FC */
+    --card: 220 60% 15%;        /* charcoal #101827 */
+    --card-foreground: 210 5% 98%; /* soft-white text #F4F6FC */
+    --popover: 0 0% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 260 80% 65%;     /* electric purple #7047F5 */
+    --primary-foreground: 210 5% 98%; /* soft-white text #F4F6FC */
+    --secondary: 320 70% 60%;   /* neon pink #F05BBD */
+    --secondary-foreground: 225 85% 6%; /* midnight navy #080D18 for text on neon pink */
+    --muted: 220 60% 15%;       /* charcoal #101827 for muted */
+    --muted-foreground: 210 20% 60%; /* gray-400 */
+    --accent: 260 80% 65%;      /* electric purple #7047F5 */
+    --accent-foreground: 210 5% 98%; /* soft-white text #F4F6FC */
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 220 60% 15%;      /* charcoal #101827 for border */
+    --input: 220 60% 15%;       /* charcoal #101827 for input */
+    --ring: 260 80% 65%;        /* electric purple #7047F5 for ring */
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
