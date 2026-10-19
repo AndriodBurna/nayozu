@@ -30,30 +30,31 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${geistSans.className} antialiased bg-background text-foreground min-h-screen flex flex-col`}>
+      <body
+        className={`${geistSans.className} antialiased bg-background text-foreground min-h-screen flex flex-col`}
+      >
         <ThemeProvider
           attribute="class"
           defaultTheme="dark"
           enableSystem
           disableTransitionOnChange
         >
-          {/* Header */}
-          <Suspense fallback={<div className="h-16">Loading...</div>}>
+          {/* Header (kept in Suspense in case it uses useSearchParams) */}
+          <Suspense fallback={<div className="h-16 border-b" />}>
             <Header />
           </Suspense>
 
-          {/* Main content area with sidebar and main content */}
-          <Suspense fallback={<div className="h-[60vh] flex items-center justify-center">Loading...</div>}>
-            <div className="flex flex-1">
-              {/* Sidebar (desktop only) */}
+          <div className="flex flex-1 min-w-0">
+            {/* Sidebar (desktop only) */}
+            <Suspense fallback={null}>
               <Sidebar />
+            </Suspense>
 
-              {/* Main content */}
-              <main className="flex-1 w-full overflow-y-auto p-6 md:p-12 pb-12">
-                {children}
-              </main>
-            </div>
-          </Suspense>
+            {/* The ONLY <main> on the page. Pages must not render their own. */}
+            <main className="flex-1 min-w-0 px-4 py-6 md:px-8 md:py-8 pb-24 md:pb-12">
+              <div className="mx-auto w-full max-w-6xl">{children}</div>
+            </main>
+          </div>
 
           {/* Bottom navigation (mobile only) */}
           <BottomNav />

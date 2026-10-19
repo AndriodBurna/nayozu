@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { ReviewCard } from "./review-card";
+import ReviewCard from "./review-card";
 import { cn } from "@/lib/utils";
 
 interface ReviewListProps {
@@ -30,7 +30,7 @@ export default function ReviewList({ animeId }: ReviewListProps) {
             body,
             created_at,
             updated_at,
-            profiles!inner (
+            profiles (
               username,
               avatar_url
             )

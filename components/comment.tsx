@@ -291,7 +291,7 @@ export default function Comment({
                     const reason = prompt("Select reason: spam, harassment, spoiler, inappropriate, other");
                     if (!reason) return;
                     const explanation = prompt("Please explain why you're reporting this comment (optional):");
-                    handleReport(reason, explanation);
+                    handleReport(reason, explanation || "");
                   }}
                   className="hover:text-[#F05BBD]"
                 >

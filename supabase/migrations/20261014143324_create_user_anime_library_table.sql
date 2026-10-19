@@ -1,6 +1,6 @@
 -- Create user_anime_library table
 create table public.user_anime_library (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users not null,
   anime_id text not null, -- storing the external anime ID as text (e.g., from AniList or Kitsu)
   status text not null check (status in ('planned', 'watching', 'completed', 'on_hold', 'dropped')),
@@ -37,7 +37,4 @@ create unique index idx_user_anime_library_user_id_anime_id
 create trigger set_user_anime_library_updated_at
   before update on public.user_anime_library
   for each row
-  execute function moddatetime ();
-
--- Create extension for moddatetime if not exists
-create extension if not exists "moddatetime" schema public;
+  execute function extensions.moddatetime(updated_at);

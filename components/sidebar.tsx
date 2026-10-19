@@ -1,20 +1,36 @@
 import Link from "next/link";
+import { Home, Film, Heart, Compass } from "lucide-react";
 
 export default function Sidebar() {
   return (
-    <aside className="hidden md:block w-64 border-r border-white/10">
-      <nav className="mt-8 space-y-2">
-        <Link href="/" className="flex items-center px-4 py-3 text-sm font-medium text-gray-300 hover:bg-[#101827/50] hover:text-white rounded-lg">
+    <aside className="hidden md:block w-60 border-r border-border p-4">
+      <nav className="space-y-1">
+        <Link
+          href="/"
+          className="flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground rounded-lg transition-colors"
+        >
+          <Home className="h-4 w-4" />
           Home
         </Link>
-        <Link href="/anime" className="flex items-center px-4 py-3 text-sm font-medium text-gray-300 hover:bg-[#101827/50] hover:text-white rounded-lg">
+        <Link
+          href="/anime"
+          className="flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground rounded-lg transition-colors"
+        >
+          <Film className="h-4 w-4" />
           Anime
         </Link>
-        {/* We can add more links as needed, but for Milestone 1 we only have Home and Anime */}
-        <Link href="#" className="flex items-center px-4 py-3 text-sm font-medium text-gray-300 hover:bg-[#101827/50] hover:text-white rounded-lg">
+        <Link
+          href="/library"
+          className="flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground rounded-lg transition-colors"
+        >
+          <Heart className="h-4 w-4" />
           Library
         </Link>
-        <Link href="#" className="flex items-center px-4 py-3 text-sm font-medium text-gray-300 hover:bg-[#101827/50] hover:text-white rounded-lg">
+        <Link
+          href="/anime?sort=popularity"
+          className="flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground rounded-lg transition-colors"
+        >
+          <Compass className="h-4 w-4" />
           Discover
         </Link>
       </nav>

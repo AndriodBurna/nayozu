@@ -1,267 +1,267 @@
+"use client";
+
 import Link from "next/link";
-import { useState } from "react";
+import Image from "next/image";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { CheckCircle, X } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
+import type { LibraryEntry } from "@/lib/libraryMap";
+import { AUTH_ENABLED } from "@/lib/features";
 
 interface AnimeCardProps {
-  id: number;
+  /** AniList id. Library rows store this (as text) in anime_id. */
+  externalId: number;
   title: string;
-  image: string;
-  averageScore: number;
+  image: string | null;
+  averageScore: number | null;
   genres: string[];
-  year: number;
-  // Optional library entry for this anime for the current user
-  libraryEntry?: {
-    id: string;
-    status: string;
-    progress: number;
-  };
-  // Optional user ID to check if the user is authenticated
+  year: number | null;
+  synopsis?: string | null;
+  episodes?: number | null;
+  status?: string | null;
+  slug: string;
+  libraryEntry?: LibraryEntry;
   userId?: string | null;
 }
 
+const LIBRARY_COLUMNS = "id, anime_id, status, progress, user_id";
+
+const selectClass =
+  "h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+
+const pretty = (s: string) => s.toLowerCase().replace(/_/g, " ");
+
 export default function AnimeCard({
-  id,
+  externalId,
   title,
   image,
   averageScore,
   genres,
   year,
+  synopsis,
+  episodes,
+  status,
+  slug,
   libraryEntry,
   userId,
 }: AnimeCardProps) {
-  const [isAdding, setIsAdding] = useState(false);
-  const [isUpdating, setIsUpdating] = useState(false);
-  const [newStatus, setNewStatus] = useState<string>("planned");
-  const [newProgress, setNewProgress] = useState<number>(0);
+  const router = useRouter();
+  const [supabase] = useState(() => createClient());
 
-  const supabase = createClient();
+  const [entry, setEntry] = useState<LibraryEntry | undefined>(libraryEntry);
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [draftStatus, setDraftStatus] = useState("planned");
+  const [draftProgress, setDraftProgress] = useState(0);
+  const [imgFailed, setImgFailed] = useState(false);
 
-  const handleAddToLibrary = async () => {
-    setIsAdding(true);
+  // Follow the server/parent if it sends a different entry later.
+  useEffect(() => setEntry(libraryEntry), [libraryEntry]);
+
+  const meta = [
+    year,
+    episodes ? `${episodes} eps` : null,
+    status ? pretty(status) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const addToLibrary = async () => {
+    setBusy(true);
     try {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-
       if (!user) {
-        // Redirect to login
-        window.location.href = "/auth/login";
+        router.push("/auth/login");
         return;
       }
-
-      // Check if already exists (should not happen if libraryEntry is undefined)
-      if (libraryEntry) {
-        // Already in library, do nothing
-        setIsAdding(false);
-        return;
-      }
-
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("user_anime_library")
         .insert({
           user_id: user.id,
-          anime_id: id.toString(), // store as text for now
+          anime_id: String(externalId),
           status: "planned",
           progress: 0,
-        });
-
+        })
+        .select(LIBRARY_COLUMNS)
+        .single();
       if (error) throw error;
-
-      // Optionally, we can refetch the library entry in the parent component
-      // For now, we just show a success state and then update the libraryEntry prop via parent refetch
-      // We'll close the add state and let the parent handle refetch
-      setIsAdding(false);
-      // We could also update the libraryEntry prop via a callback, but we don't have one.
-      // Instead, we'll just show a temporary success message and then rely on the parent to refetch.
-      // For simplicity, we'll just reset the state and let the parent refetch on its own.
-      // We'll trigger a refetch by calling a function if provided, but we don't have one.
-      // We'll just set a timeout to reset the state and hope the parent refetches.
-      // Better: we'll pass a callback prop `onLibraryChange` but we don't want to change the API too much.
-      // Given the scope, we'll just update the libraryEntry locally for optimistic UI.
-      // We'll set the libraryEntry to the new entry (we don't have the ID yet).
-      // We'll skip optimistic update for now and just reset the form.
+      setEntry(data);
     } catch (err) {
       console.error("Failed to add to library:", err);
-      setIsAdding(false);
+    } finally {
+      setBusy(false);
     }
   };
 
-  const handleUpdateLibrary = async () => {
-    setIsUpdating(true);
+  const saveEdit = async () => {
+    if (!entry) return;
+    setBusy(true);
     try {
-      if (!libraryEntry) return;
-
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("user_anime_library")
         .update({
-          status: newStatus,
-          progress: newProgress,
+          status: draftStatus,
+          progress: draftProgress,
           updated_at: new Date().toISOString(),
         })
-        .eq("id", libraryEntry.id);
-
+        .eq("id", entry.id)
+        .select(LIBRARY_COLUMNS)
+        .single();
       if (error) throw error;
-
-      // Reset update state
-      setIsUpdating(false);
-      // Again, we would rely on parent to refetch, but we can optimistically update the libraryEntry prop
-      // We'll update the libraryEntry object locally (since we have it as a prop, we can't mutate it, but we can state)
-      // We'll just reset the form and let the parent refetch.
+      setEntry(data);
+      setEditing(false);
     } catch (err) {
       console.error("Failed to update library entry:", err);
-      setIsUpdating(false);
+    } finally {
+      setBusy(false);
     }
   };
 
-  const handleRemoveFromLibrary = async () => {
-    if (!libraryEntry) return;
+  const removeFromLibrary = async () => {
+    if (!entry) return;
+    setBusy(true);
     try {
       const { error } = await supabase
         .from("user_anime_library")
         .delete()
-        .eq("id", libraryEntry.id);
-
+        .eq("id", entry.id);
       if (error) throw error;
-
-      // Again, rely on parent to refetch
+      setEntry(undefined);
+      setEditing(false);
     } catch (err) {
       console.error("Failed to remove from library:", err);
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
-    <Link href={`/anime/${id}`} className="group block hover:shadow-xl transition-shadow">
-      <div className="relative bg-[#101827/80] rounded-lg p-4 overflow-hidden">
-        {/* Cover Image */}
-        <div className="aspect-w-2 aspect-h-3 mb-4">
-          <img
+    <article className="anime-card">
+      {/* Poster (link) */}
+      <Link href={`/anime/${slug}`} className="anime-card-poster block" aria-label={title}>
+        {image && !imgFailed ? (
+          <Image
             src={image}
             alt={title}
-            className="rounded-lg h-full w-full object-cover group-hover:opacity-90 transition-opacity"
+            fill
+            sizes="(min-width: 1024px) 230px, 210px"
+            className="object-cover"
+            onError={() => setImgFailed(true)}
           />
-        </div>
-
-        {/* Title and Rating */}
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-lg font-bold text-white group-hover:underline">
-            {title}
-          </h3>
-          <div className="flex items-center text-sm text-gray-400">
-            {averageScore}/100
+        ) : (
+          <div className="flex h-full items-center justify-center p-3 text-center text-xs text-muted-foreground">
+            No image
           </div>
+        )}
+      </Link>
+
+      <div className="anime-card-body">
+        <div className="anime-card-head">
+          <h3 className="anime-card-title">
+            <Link href={`/anime/${slug}`} className="hover:underline">
+              {title}
+            </Link>
+          </h3>
+          {averageScore ? (
+            <span className="anime-card-score">{averageScore}/100</span>
+          ) : null}
         </div>
 
-        {/* Genres */}
-        <div className="flex flex-wrap gap-1 mb-2 text-sm text-gray-400">
-          {genres.map((genre) => (
-            <span key={genre} className="bg-[#101827/60] px-2 py-0.5 rounded">
-              {genre}
-            </span>
-          ))}
-        </div>
+        {meta && <p className="text-xs capitalize text-muted-foreground">{meta}</p>}
 
-        {/* Year */}
-        <div className="text-sm text-gray-400 mb-4">
-          {year}
-        </div>
+        {synopsis && (
+          <p className="line-clamp-2 text-xs text-muted-foreground">{synopsis}</p>
+        )}
 
-        {/* Library Controls */}
-        {!userId ? (
-          // Not authenticated
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              window.location.href = "/auth/login";
-            }}
-            className="mt-2"
-          >
-            Sign in to add to library
-          </Button>
-        ) : libraryEntry ? (
-          // In library
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm text-gray-400">
-              <span>Status: {libraryEntry.status}</span>
-              <span>Progress: {libraryEntry.progress}</span>
+        {/* Everything below is pinned to the bottom so cards line up */}
+        <div className="mt-auto flex flex-col gap-3 pt-1">
+          {genres.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {genres.slice(0, 3).map((genre) => (
+                <Badge key={genre} variant="secondary" className="font-normal">
+                  {genre}
+                </Badge>
+              ))}
             </div>
-            <div className="flex justify-end space-x-1">
-              {!isUpdating ? (
+          )}
+
+          {/* Library controls (outside the links: no buttons inside <a>) */}
+          {!AUTH_ENABLED ? null : !userId ? (
+            <Button asChild variant="outline" size="sm" className="w-full">
+              <Link href="/auth/login">Sign in to add to library</Link>
+            </Button>
+          ) : !entry ? (
+            <Button size="sm" className="w-full" onClick={addToLibrary} disabled={busy}>
+              {busy ? "Adding..." : "+ Add to Library"}
+            </Button>
+          ) : editing ? (
+            <div className="space-y-2">
+              <select
+                aria-label="Status"
+                value={draftStatus}
+                onChange={(e) => setDraftStatus(e.target.value)}
+                className={selectClass}
+              >
+                <option value="planned">Planned</option>
+                <option value="watching">Watching</option>
+                <option value="completed">Completed</option>
+                <option value="on_hold">On Hold</option>
+                <option value="dropped">Dropped</option>
+              </select>
+              <Input
+                type="number"
+                min={0}
+                aria-label="Progress"
+                value={draftProgress}
+                onChange={(e) => setDraftProgress(parseInt(e.target.value, 10) || 0)}
+                className="h-8 text-xs md:text-xs"
+              />
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" className="flex-1" onClick={() => setEditing(false)}>
+                  Cancel
+                </Button>
+                <Button size="sm" className="flex-1" onClick={saveEdit} disabled={busy}>
+                  Save
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-xs capitalize text-muted-foreground">
+                {pretty(entry.status)} · ep {entry.progress}
+              </p>
+              <div className="flex gap-2">
                 <Button
-                  variant="outline"
                   size="sm"
+                  variant="outline"
+                  className="flex-1"
                   onClick={() => {
-                    setIsUpdating(true);
-                    setNewStatus(libraryEntry.status);
-                    setNewProgress(libraryEntry.progress);
+                    setDraftStatus(entry.status);
+                    setDraftProgress(entry.progress);
+                    setEditing(true);
                   }}
                 >
                   Edit
                 </Button>
-              ) : (
-                <>
-                  <div className="flex space-x-1">
-                    <select
-                      value={newStatus}
-                      onChange={(e) => setNewStatus(e.target.value)}
-                      className="border border-gray-600 bg-[#101827/80] rounded px-1 py-0.5 text-xs text-white"
-                    >
-                      <option value="planned">Planned</option>
-                      <option value="watching">Watching</option>
-                      <option value="completed">Completed</option>
-                      <option value="on_hold">On Hold</option>
-                      <option value="dropped">Dropped</option>
-                    </select>
-                    <input
-                      type="number"
-                      min={0}
-                      value={newProgress}
-                      onChange={(e) => setNewProgress(parseInt(e.target.value) || 0)}
-                      className="border border-gray-600 bg-[#101827/80] rounded w-20 px-1 py-0.5 text-xs text-white"
-                    />
-                  </div>
-                  <div className="flex justify-end space-x-1 mt-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        setIsUpdating(false);
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      onClick={handleUpdateLibrary}
-                    >
-                      Save
-                    </Button>
-                  </div>
-                </>
-              )}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleRemoveFromLibrary}
-                className="text-red-400 hover:text-red-500"
-              >
-                Remove
-              </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="flex-1 text-destructive hover:text-destructive"
+                  onClick={removeFromLibrary}
+                  disabled={busy}
+                >
+                  Remove
+                </Button>
+              </div>
             </div>
-          </div>
-        ) : (
-          // Not in library
-          <Button
-            onClick={handleAddToLibrary}
-            disabled={isAdding}
-            className="mt-2"
-          >
-            {isAdding ? "Adding..." : "+ Add to Library"}
-          </Button>
-        )}
+          )}
+        </div>
       </div>
-    </Link>
+    </article>
   );
 }

@@ -1,3 +1,6 @@
+-- Enable moddatetime extension
+create extension if not exists "moddatetime" schema extensions;
+
 -- Create profiles table
 create table public.profiles (
   id uuid references auth.users not null primary key,
@@ -29,7 +32,4 @@ create policy "Users can update their own profile"
 create trigger set_profiles_updated_at
   before update on public.profiles
   for each row
-  execute function moddatetime ();
-
--- Create extension for moddatetime if not exists
-create extension if not exists "moddatetime" schema public;
+  execute function extensions.moddatetime(updated_at);

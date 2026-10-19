@@ -7,189 +7,195 @@ import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
-import { UserCircle } from "lucide-react";
+import { ChevronDown, Shield, User as UserIcon } from "lucide-react";
+import { AUTH_ENABLED } from "@/lib/features";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
+interface UserProfile {
+  username?: string | null;
+  display_name?: string | null;
+  avatar_url?: string | null;
+}
 
 export default function Header() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [userRole, setUserRole] = useState<string | null>(null); // 'moderator' | 'admin' | null
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(AUTH_ENABLED);
 
   const handleSearchSubmit = (query: string) => {
+    const params = new URLSearchParams(searchParams.toString());
     if (query.trim()) {
-      // Update the search query parameter, preserving other parameters if needed
-      const params = new URLSearchParams(searchParams.toString());
       params.set("search", query.trim());
-      // We want to navigate to /anime with the updated search params
-      router.push(`/anime?${params.toString()}`);
     } else {
-      // If query is empty, we can remove the search param
-      const params = new URLSearchParams(searchParams.toString());
       params.delete("search");
-      router.push(`/anime?${params.toString()}`);
     }
+    router.push(`/anime?${params.toString()}`);
   };
 
-  // Fetch user data and role
   useEffect(() => {
+    if (!AUTH_ENABLED) {
+      setLoading(false);
+      return;
+    }
+
     async function fetchUser() {
       setLoading(true);
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      setUser(user);
+      try {
+        const supabase = createClient();
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        setUser(user);
 
-      if (user) {
-        // Fetch user role
-        const { data: roleData, error: roleError } = await supabase
-          .from("user_roles")
-          .select("role")
-          .eq("user_id", user.id)
-          .single();
+        if (user) {
+          // Fetch profile details
+          const { data: profileData } = await supabase
+            .from("profiles")
+            .select("username, display_name, avatar_url")
+            .eq("id", user.id)
+            .maybeSingle();
 
-        if (!roleError && roleData) {
-          setUserRole(roleData.role);
+          if (profileData) {
+            setProfile(profileData);
+          }
+
+          // Fetch user role
+          const { data: roleData } = await supabase
+            .from("user_roles")
+            .select("role")
+            .eq("user_id", user.id)
+            .maybeSingle();
+
+          if (roleData) {
+            setUserRole(roleData.role);
+          } else {
+            setUserRole(null);
+          }
         } else {
+          setProfile(null);
           setUserRole(null);
         }
-      } else {
-        setUserRole(null);
+      } catch (err) {
+        console.error("Error fetching header auth info:", err);
+      } finally {
+        setLoading(false);
       }
-
-      setLoading(false);
     }
 
     fetchUser();
   }, []);
 
-  if (loading) {
-    return (
-      <header className="flex items-center justify-between border-b border-white/10 px-6 py-4 md:px-8">
-        <div className="flex items-center space-x-3">
-          <h1 className="text-xl font-extrabold tracking-wide">
-            NAYO<span className="text-[#7047F5]">ZU</span>
-          </h1>
-        </div>
-        <div className="hidden md:flex items-center space-x-4">
-          <SearchBar onSubmit={handleSearchSubmit} />
-          <ThemeSwitcher />
-        </div>
-        <div className="flex items-center space-x-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded bg-gray-500">
-            Loading...
-          </div>
-        </div>
-      </header>
-    );
-  }
+  const handleSignOut = async () => {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    setUser(null);
+    setProfile(null);
+    setUserRole(null);
+    router.push("/");
+    router.refresh();
+  };
+
+  const displayName =
+    profile?.display_name ||
+    profile?.username ||
+    user?.email?.split("@")[0] ||
+    "Account";
+
+  const initial = displayName.charAt(0).toUpperCase();
 
   return (
-    <header className="flex items-center justify-between border-b border-white/10 px-6 py-4 md:px-8">
+    <header className="flex items-center justify-between border-b border-border bg-background/95 backdrop-blur px-6 py-4 md:px-8">
       <div className="flex items-center space-x-3">
-        <h1 className="text-xl font-extrabold tracking-wide">
-          NAYO<span className="text-[#7047F5]">ZU</span>
-        </h1>
+        <Link href="/" className="text-xl font-extrabold tracking-wide hover:opacity-90">
+          NAYO<span className="text-primary">ZU</span>
+        </Link>
       </div>
+
       <div className="hidden md:flex items-center space-x-4">
         <SearchBar onSubmit={handleSearchSubmit} />
         <ThemeSwitcher />
       </div>
+
       <div className="flex items-center space-x-3">
-        {!user ? (
-          <>
-            <a
-              href="/auth/login"
-              className="text-sm text-gray-300 hover:text-white mr-3"
-            >
-              Sign In
-            </a>
-            <a
-              href="/auth/sign-up"
-              className="text-sm text-gray-300 hover:text-white"
-            >
-              Register
-            </a>
-          </>
+        {!AUTH_ENABLED ? null : loading ? (
+          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-secondary animate-pulse text-xs">
+            ...
+          </div>
+        ) : !user ? (
+          <div className="flex items-center gap-2">
+            <Button asChild variant="ghost" size="sm">
+              <Link href="/auth/login">Sign In</Link>
+            </Button>
+            <Button asChild size="sm">
+              <Link href="/auth/sign-up">Register</Link>
+            </Button>
+          </div>
         ) : (
-          <div className="relative">
-            <button
-              className="flex items-center space-x-2 text-sm text-gray-300 hover:text-white"
-              onClick={(e) => {
-                e.preventDefault();
-                // Toggle a simple menu (we'll use a simple approach for now)
-                const menu = document.getElementById("user-menu");
-                if (menu) {
-                  menu.classList.toggle("hidden");
-                }
-              }}
-            >
-              {user.avatar_url ? (
-                <img
-                  src={user.avatar_url}
-                  alt="Avatar"
-                  className="w-8 h-8 rounded-full"
-                />
-                ) : (
-                <div className="w-8 h-8 rounded-full bg-gray-500 flex items-center justify-center text-white">
-                  {user.username?.charAt(0) ?? "?"}
-                </div>
-              )}
-              <span className="hidden md:inline">
-                {user.display_name || user.username}
-              </span>
-              <svg
-                className="w-4 h-4 ml-1"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="flex items-center space-x-2 text-sm text-muted-foreground hover:text-foreground focus:outline-none"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M19 9l-7 7-7-7"
-                />
-              </svg>
-            </button>
-            {/* Simple dropdown menu */}
-            <div id="user-menu" className="absolute right-0 mt-2 w-56 bg-[#101827/80] rounded-lg shadow-lg z-20 hidden">
-              <div className="py-2">
-                <Link
-                  href="/profile"
-                  className="block px-4 py-2 text-sm text-gray-300 hover:bg-[#101827/60] hover:text-white"
-                >
+                {profile?.avatar_url ? (
+                  <img
+                    src={profile.avatar_url}
+                    alt={displayName}
+                    className="w-8 h-8 rounded-full object-cover border"
+                  />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-primary/20 text-primary font-semibold flex items-center justify-center text-xs">
+                    {initial}
+                  </div>
+                )}
+                <span className="hidden md:inline font-medium text-foreground">
+                  {displayName}
+                </span>
+                <ChevronDown className="w-4 h-4 text-muted-foreground" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                Signed in as <span className="font-semibold text-foreground">{displayName}</span>
+              </div>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem asChild>
+                <Link href="/profile" className="cursor-pointer flex items-center gap-2">
+                  <UserIcon className="w-4 h-4" />
                   Profile
                 </Link>
-                <Link
-                  href="/library"
-                  className="block px-4 py-2 text-sm text-gray-300 hover:bg-[#101827/60] hover:text-white"
-                >
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link href="/library" className="cursor-pointer flex items-center gap-2">
                   Library
                 </Link>
-                {/* Moderation link - only for moderators and admins */}
-                {userRole && (userRole === "moderator" || userRole === "admin") && (
-                  <Link
-                    href="/admin/moderation"
-                    className="block px-4 py-2 text-sm text-gray-300 hover:bg-[#101827/60] hover:text-white"
-                  >
+              </DropdownMenuItem>
+              {userRole && (userRole === "moderator" || userRole === "admin") && (
+                <DropdownMenuItem asChild>
+                  <Link href="/admin/moderation" className="cursor-pointer flex items-center gap-2 text-primary">
+                    <Shield className="w-4 h-4" />
                     Moderation
                   </Link>
-                )}
-                <button
-                  onClick={async () => {
-                    const supabase = createClient();
-                    await supabase.auth.signOut();
-                    router.push("/");
-                  }}
-                  className="block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-[#101827/60] hover:text-white"
-                >
-                  Sign Out
-                </button>
-              </div>
-            </div>
-          </div>
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={handleSignOut}
+                className="cursor-pointer text-destructive focus:text-destructive"
+              >
+                Sign Out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </div>
     </header>

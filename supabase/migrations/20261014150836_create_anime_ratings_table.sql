@@ -1,6 +1,6 @@
 -- Create anime_ratings table
 create table public.anime_ratings (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users not null,
   anime_id text not null, -- stable external anime ID
   rating integer not null check (rating >= 1 and rating <= 10),
@@ -36,7 +36,4 @@ create unique index idx_anime_ratings_user_id_anime_id
 create trigger set_anime_ratings_updated_at
   before update on public.anime_ratings
   for each row
-  execute function moddatetime ();
-
--- Create extension for moddatetime if not exists
-create extension if not exists "moddatetime" schema public;
+  execute function extensions.moddatetime(updated_at);

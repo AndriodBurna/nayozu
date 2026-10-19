@@ -201,7 +201,7 @@ export default function ReviewCard({ review }: ReviewCardProps) {
                   const reason = prompt("Select reason: spam, harassment, spoiler, inappropriate, other");
                   if (!reason) return;
                   const explanation = prompt("Please explain why you're reporting this review (optional):");
-                  handleReport(reason, explanation);
+                  handleReport(reason, explanation || "");
                 }}
                 className="hover:text-[#F05BBD]"
               >

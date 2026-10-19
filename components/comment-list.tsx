@@ -1,16 +1,17 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import Comment from "./comment";
-import { cn } from "@/lib/utils";
-import { formatDistanceToNow } from "date-fns";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 
 interface CommentListProps {
   animeId: string; // external anime ID as string
 }
 
-interface CommentWithReplies {
+interface CommentRow {
   id: string;
   user_id: string;
   anime_id: string;
@@ -24,85 +25,62 @@ interface CommentWithReplies {
     username: string;
     avatar_url: string | null;
   };
+}
+
+interface CommentWithReplies extends CommentRow {
   replies: CommentWithReplies[];
 }
 
+// Used for both the list and for a freshly inserted comment, so a new
+// comment always carries its author (profiles) and renders correctly.
+const COMMENT_SELECT = `
+  id, user_id, anime_id, parent_comment_id, body, is_spoiler, is_hidden,
+  created_at, updated_at,
+  profiles ( username, avatar_url )
+`;
+
+const byCreatedAt = (a: CommentRow, b: CommentRow) =>
+  new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+
 export default function CommentList({ animeId }: CommentListProps) {
   const [comments, setComments] = useState<CommentWithReplies[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-  const [replyingTo, setReplyingTo] = useState<string | null>(null); // comment ID we are replying to
-  const [replyBody, setReplyBody] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [posting, setPosting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [body, setBody] = useState("");
 
-  // Fetch all comments for the anime and build a tree
   useEffect(() => {
     const fetchComments = async () => {
       try {
         setLoading(true);
+        setLoadError(null);
         const supabase = createClient();
-        // Fetch all comments for this anime, ordered by created_at ascending (so older first)
         const { data, error } = await supabase
           .from("anime_comments")
-          .select(`
-            id,
-            user_id,
-            anime_id,
-            parent_comment_id,
-            body,
-            is_spoiler,
-            is_hidden,
-            created_at,
-            updated_at,
-            profiles!inner (
-              username,
-              avatar_url
-            )
-          `)
+          .select(COMMENT_SELECT)
           .eq("anime_id", animeId)
           .order("created_at", { ascending: true });
-
         if (error) throw error;
 
-        // Build a map of comment ID to comment object
-        const commentMap = new Map<string, CommentWithReplies>();
-        const rootComments: CommentWithReplies[] = [];
+        const rows = (data ?? []) as unknown as CommentRow[];
+        const map = new Map<string, CommentWithReplies>();
+        rows.forEach((row) => map.set(row.id, { ...row, replies: [] }));
 
-        data.forEach((comment: any) => {
-          const commentWithReplies: CommentWithReplies = {
-            ...comment,
-            replies: [],
-          };
-          commentMap.set(comment.id, commentWithReplies);
+        const roots: CommentWithReplies[] = [];
+        rows.forEach((row) => {
+          const node = map.get(row.id);
+          if (!node) return;
+          const parent = row.parent_comment_id ? map.get(row.parent_comment_id) : undefined;
+          if (parent) parent.replies.push(node);
+          else if (!row.parent_comment_id) roots.push(node);
         });
 
-        // Assign replies to their parents
-        data.forEach((comment: any) => {
-          const commentWithReplies = commentMap.get(comment.id);
-          if (!commentWithReplies) return;
-
-          if (comment.parent_comment_id) {
-            const parent = commentMap.get(comment.parent_comment_id);
-            if (parent) {
-              parent.replies.push(commentWithReplies);
-            }
-          } else {
-            rootComments.push(commentWithReplies);
-          }
-        });
-
-        // Sort root comments by created_at (ascending) and sort replies within each comment by created_at (ascending)
-        rootComments.sort((a, b) =>
-          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-        );
-        rootComments.forEach((comment) => {
-          comment.replies.sort((a, b) =>
-            new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-          );
-        });
-
-        setComments(rootComments);
-      } catch (err: any) {
-        setError(err.message || "Failed to load comments");
+        roots.sort(byCreatedAt);
+        roots.forEach((c) => c.replies.sort(byCreatedAt));
+        setComments(roots);
+      } catch (err) {
+        setLoadError((err as { message?: string }).message || "Failed to load comments");
       } finally {
         setLoading(false);
       }
@@ -111,220 +89,123 @@ export default function CommentList({ animeId }: CommentListProps) {
     fetchComments();
   }, [animeId]);
 
-  const handleTopLevelCommentSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleTopLevelSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!replyBody.trim()) return;
-    setLoading(true);
-    setError(null);
+    if (!body.trim()) return;
+    setPosting(true);
+    setFormError(null);
     try {
       const supabase = createClient();
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      if (!user) {
-        throw new Error("User not authenticated");
-      }
-      const { data: newComment, error } = await supabase
+      if (!user) throw new Error("You need to sign in to comment.");
+
+      const now = new Date().toISOString();
+      const { data, error } = await supabase
         .from("anime_comments")
         .insert({
           user_id: user.id,
           anime_id: animeId,
           parent_comment_id: null,
-          body: replyBody.trim(),
+          body: body.trim(),
           is_spoiler: false,
           is_hidden: false,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          created_at: now,
+          updated_at: now,
         })
-        .select()
+        .select(COMMENT_SELECT)
         .single();
-
       if (error) throw error;
-      setReplyBody("");
-      // Refetch comments to include the new one
-      // We could optimistically add it, but for simplicity we refetch
-      // We'll call fetchComments again via the effect by triggering a state change?
-      // Instead, we can update the comments state directly.
-      // We'll refetch by resetting the loading state and calling fetchComments again.
-      // But we can also update the map and rootComments manually.
-      // For now, we'll refetch by setting loading to true and then calling fetchComments again.
-      // We'll do that by resetting the comments array and letting the effect run again?
-      // Actually, we can just call the fetchComments function again.
-      // We'll do that after a short timeout to avoid infinite loop?
-      // Instead, we'll update the state optimistically.
-      // We'll add the new comment to the root comments (since it's a top-level comment).
-      const newCommentWithReplies: CommentWithReplies = {
-        ...newComment,
-        replies: [],
-      };
-      setComments((prev) => [...prev, newCommentWithReplies]);
-    } catch (err: any) {
-      setError(err.message || "Failed to submit comment");
-    } finally {
-      setLoading(false);
-    }
-  };
 
-  const handleReplySubmit = async (parentId: string, e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!replyBody.trim()) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) {
-        throw new Error("User not authenticated");
-      }
-      const { data: newComment, error } = await supabase
-        .from("anime_comments")
-        .insert({
-          user_id: user.id,
-          anime_id: animeId,
-          parent_comment_id: parentId,
-          body: replyBody.trim(),
-          is_spoiler: false,
-          is_hidden: false,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-      setReplyBody("");
-      // Optimistically update the comment's replies
-      setComments((prev) =>
-        prev.map((comment) => {
-          if (comment.id === parentId) {
-            const newCommentWithReplies: CommentWithReplies = {
-              ...newComment,
-              replies: [],
-            };
-            return {
-              ...comment,
-              replies: [...comment.replies, newCommentWithReplies],
-            };
-          }
-          return comment;
-        })
-      );
-    } catch (err: any) {
-      setError(err.message || "Failed to submit reply");
+      setBody("");
+      setComments((prev) => [...prev, { ...(data as unknown as CommentRow), replies: [] }]);
+    } catch (err) {
+      setFormError((err as { message?: string }).message || "Failed to submit comment");
     } finally {
-      setLoading(false);
+      setPosting(false);
     }
   };
 
   if (loading) {
-    return <div className="flex h-[60vh] items-center justify-center">Loading...</div>;
+    return <div className="py-10 text-center text-muted-foreground">Loading comments...</div>;
   }
-
-  if (error) {
-    return <div className="flex h-[60vh] items-center justify-center">{error}</div>;
+  if (loadError) {
+    return <div className="py-10 text-center text-destructive">{loadError}</div>;
   }
 
   return (
     <div className="space-y-6">
-      {/* Top-level comment form */}
-      <div className="border border-gray-700 rounded-lg p-4 bg-[#101827/80]">
-        <h3 className="font-semibold text-white mb-2">Add a comment</h3>
-        <form onSubmit={handleTopLevelCommentSubmit} className="space-y-3">
+      <div className="rounded-lg border bg-card p-4">
+        <h3 className="mb-2 font-semibold">Add a comment</h3>
+        <form onSubmit={handleTopLevelSubmit} className="space-y-3">
           <div className="space-y-1">
             <Label htmlFor="top-level-comment-body">Comment</Label>
             <Textarea
               id="top-level-comment-body"
-              value={replyBody}
-              onChange={(e) => setReplyBody(e.target.value)}
-              className="w-full p-2 rounded border border-gray-600 bg-[#101827/80] text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#7047F5]"
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
               rows={3}
             />
           </div>
-
-          {error && <p className="text-sm text-red-500">{error}</p>}
-
-          <Button
-            type="submit"
-            variant="default"
-            size="sm"
-            disabled={loading}
-            className="hover:bg-[#7047F5]/80"
-          >
-            {loading ? "Posting..." : "Post Comment"}
+          {formError && <p className="text-sm text-destructive">{formError}</p>}
+          <Button type="submit" size="sm" disabled={posting}>
+            {posting ? "Posting..." : "Post Comment"}
           </Button>
         </form>
       </div>
 
-      {/* Comments list */}
       <div className="space-y-4">
         {comments.length === 0 ? (
-          <p className="text-center text-gray-400">No comments yet. Be the first to comment!</p>
+          <p className="text-center text-muted-foreground">
+            No comments yet. Be the first to comment!
+          </p>
         ) : (
-          <>
-            {comments.map((comment) => (
-              <Comment
-                key={comment.id}
-                comment={comment}
-                onReplyAdd = (parentId, newComment) => {
-                  // Optimistically add the reply to the comment's replies
-                  setComments((prev) =>
-                    prev.map((c) => {
-                      if (c.id === parentId) {
-                        const newCommentWithReplies: CommentWithReplies = {
-                          ...newComment,
-                          replies: [],
-                        };
-                        return {
-                          ...c,
-                          replies: [...c.replies, newCommentWithReplies],
-                        };
-                      }
-                      return c;
-                    })
-                  );
-                }
-                onCommentUpdate = (commentId, updates) => {
-                  setComments((prev) =>
-                    prev.map((comment) => {
-                      if (comment.id === commentId) {
-                        return { ...comment, ...updates };
-                      }
-                      // Also check in replies
-                      const updatedReplies = comment.replies.map((reply) => {
-                        if (reply.id === commentId) {
-                          return { ...reply, ...updates };
-                        }
-                        return reply;
-                      });
-                      if (updatedReplies.some((r) => r.id === commentId)) {
-                        return { ...comment, replies: updatedReplies };
-                      }
-                      return comment;
-                    })
-                  );
-                }
-                onCommentDelete = (commentId) => {
-                  setComments((prev) => {
-                    // Remove from root comments or from replies
-                    const newRoot = prev.filter((comment) => comment.id !== commentId);
-                    // Also remove from replies of each comment
-                    const updated = newRoot.map((comment) => ({
-                      ...comment,
-                      replies: comment.replies.filter((reply) => reply.id !== commentId),
-                    }));
-                    return updated;
-                  });
-                }
-                onCommentReport = (commentId, reason, explanation) => {
-                  // We'll just call an alert for now; in a real app we might show a modal
-                  alert(`Report submitted for comment ${commentId}`);
-                }
-              />
-              {/* Replies are handled within the Comment component via onReplyAdd */}
-            ))}
-          </>
+          comments.map((comment) => (
+            <Comment
+              key={comment.id}
+              comment={comment}
+              onReplyAdd={(parentId: string, newComment: CommentRow) => {
+                setComments((prev) =>
+                  prev.map((c) =>
+                    c.id === parentId
+                      ? { ...c, replies: [...c.replies, { ...newComment, replies: [] }] }
+                      : c,
+                  ),
+                );
+              }}
+              onCommentUpdate={(commentId: string, updates: Partial<CommentRow>) => {
+                setComments((prev) =>
+                  prev.map((c) => {
+                    if (c.id === commentId) return { ...c, ...updates };
+                    if (c.replies.some((r) => r.id === commentId)) {
+                      return {
+                        ...c,
+                        replies: c.replies.map((r) =>
+                          r.id === commentId ? { ...r, ...updates } : r,
+                        ),
+                      };
+                    }
+                    return c;
+                  }),
+                );
+              }}
+              onCommentDelete={(commentId: string) => {
+                setComments((prev) =>
+                  prev
+                    .filter((c) => c.id !== commentId)
+                    .map((c) => ({
+                      ...c,
+                      replies: c.replies.filter((r) => r.id !== commentId),
+                    })),
+                );
+              }}
+              onCommentReport={(commentId: string) => {
+                // Placeholder until the moderation flow is wired up.
+                alert(`Report submitted for comment ${commentId}`);
+              }}
+            />
+          ))
         )}
       </div>
     </div>

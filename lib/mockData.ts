@@ -13,6 +13,7 @@ export const mockAnime = [
     status: "COMPLETED",
     averageScore: 91, // rating * 10
     popularity: 95,
+    slug: "attack-on-titan-tv-1",
   },
   {
     id: 2,
@@ -28,6 +29,7 @@ export const mockAnime = [
     status: "COMPLETED",
     averageScore: 89,
     popularity: 90,
+    slug: "demon-slayer-tv-2",
   },
   {
     id: 3,
@@ -43,6 +45,7 @@ export const mockAnime = [
     status: "RELEASING", // ongoing
     averageScore: 86,
     popularity: 85,
+    slug: "my-hero-academia-tv-3",
   },
   {
     id: 4,
@@ -58,6 +61,7 @@ export const mockAnime = [
     status: "COMPLETED",
     averageScore: 88,
     popularity: 88,
+    slug: "jujutsu-kaisen-tv-4",
   },
   {
     id: 5,
@@ -73,6 +77,7 @@ export const mockAnime = [
     status: "RELEASING",
     averageScore: 90,
     popularity: 100,
+    slug: "one-piece-tv-5",
   },
   {
     id: 6,
@@ -88,6 +93,7 @@ export const mockAnime = [
     status: "COMPLETED",
     averageScore: 87,
     popularity: 80,
+    slug: "naruto-shippuden-tv-6",
   },
   {
     id: 7,
@@ -103,6 +109,7 @@ export const mockAnime = [
     status: "COMPLETED",
     averageScore: 92,
     popularity: 90,
+    slug: "fullmetal-alchemist-brotherhood-tv-7",
   },
   {
     id: 8,
@@ -118,6 +125,7 @@ export const mockAnime = [
     status: "COMPLETED",
     averageScore: 89,
     popularity: 85,
+    slug: "death-note-tv-8",
   },
   {
     id: 9,
@@ -133,6 +141,7 @@ export const mockAnime = [
     status: "COMPLETED",
     averageScore: 89,
     popularity: 90,
+    slug: "spirited-away-movie-9",
   },
   {
     id: 10,
@@ -148,6 +157,7 @@ export const mockAnime = [
     status: "COMPLETED",
     averageScore: 88,
     popularity: 82,
+    slug: "your-lie-in-april-tv-10",
   },
 ];
 

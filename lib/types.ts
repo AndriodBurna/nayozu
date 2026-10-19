@@ -1,22 +1,8 @@
-export interface Anime {
-  id: number;
-  title: string;
-  alternativeTitles?: string[];
-  synopsis?: string;
-  coverImage?: string; // URL to cover image
-  genres?: string[];
-  releaseYear?: number;
-  releaseSeason?: string; // e.g., "WINTER 2023"
-  format?: string; // e.g., "TV", "MOVIE", "OVA"
-  episodeCount?: number;
-  status?: string; // e.g., "RELEASING", "COMPLETED"
-  averageScore?: number; // 0-100
-  popularity?: number;
-  // Add more fields as needed
-}
+export type { Anime, AnimeRow, GenreRef } from "./services/normalizeAnime";
+import type { Anime } from "./services/normalizeAnime";
 
 export interface Genre {
-  id: number;
+  id: string | number;
   name: string;
 }
 
@@ -28,10 +14,8 @@ export interface AnimeSearchResult {
 
 export interface AnimeProvider {
   searchAnime: (query: string, page?: number) => Promise<AnimeSearchResult>;
-  getAnimeById: (id: number) => Promise<Anime>;
-  getAnimesByIds: (ids: number[]) => Promise<Anime[]>;
+  getAnimeById: (id: string | number) => Promise<Anime>;
+  getAnimesByIds: (ids: Array<string | number>) => Promise<Anime[]>;
   getGenres: () => Promise<Genre[]>;
-  getAnimesByGenre: (genreId: number, page?: number) => Promise<AnimeSearchResult>;
-  getAllAnime: () => Promise<Anime[]>;
-  // Additional methods can be added as needed
+  getAnimesByGenre: (genreId: string | number, page?: number) => Promise<AnimeSearchResult>;
 }

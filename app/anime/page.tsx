@@ -1,192 +1,193 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import AnimeGrid from "@/components/anime-grid";
-import Loading from "@/components/loading";
-import Empty from "@/components/empty";
-import Error from "@/components/error";
-import { getAllAnime, getGenres } from "@/lib/services/animeService";
+import ErrorState from "@/components/error";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { getAnimePage, getGenres, PAGE_SIZE } from "@/lib/services/animeService";
+import type { Anime } from "@/lib/services/normalizeAnime";
+import type { LibraryEntry } from "@/lib/libraryMap";
+import { AUTH_ENABLED } from "@/lib/features";
 import { createClient } from "@/lib/supabase/client";
 
-export default function AnimePage() {
-  const searchParams = useSearchParams();
+const selectClass =
+  "h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+
+function GridSkeleton() {
+  return (
+    <div className="anime-grid">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div key={i} className="anime-card animate-pulse">
+          <div className="anime-card-poster" />
+          <div className="anime-card-body">
+            <div className="h-4 w-3/4 rounded bg-secondary" />
+            <div className="h-3 w-1/2 rounded bg-secondary" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AnimeBrowser() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
-  const [animeData, setAnimeData] = useState<Array<any>>([]);
-  const [genreData, setGenreData] = useState<Array<any>>([]);
-  const [libraryEntries, setLibraryEntries] = useState<Array<any> | undefined>(undefined);
+  // The URL is the single source of truth for filters.
+  const search = searchParams.get("search") ?? searchParams.get("q") ?? "";
+  const genre = searchParams.get("genre") ?? "";
+  const sort = searchParams.get("sort") ?? "popularity";
+  const page = Math.max(Number(searchParams.get("page")) || 1, 1);
+
+  const [text, setText] = useState(search); // what the user is typing
+  const [items, setItems] = useState<Anime[]>([]);
+  const [total, setTotal] = useState(0);
+  const [genres, setGenres] = useState<Array<{ id: string; name: string }>>([]);
+  const [libraryEntries, setLibraryEntries] = useState<LibraryEntry[] | undefined>();
   const [userId, setUserId] = useState<string | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-  const [selectedGenre, setSelectedGenre] = useState<string>("");
-  const [sortBy, setSortBy] = useState<string>("popularity"); // options: popularity, rating, year
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
 
-  // Initialize selectedGenre and sortBy from URL params
-  useEffect(() => {
-    const genreParam = searchParams.get("genre") || "";
-    const sortParam = searchParams.get("sort") || "popularity";
-    setSelectedGenre(genreParam);
-    setSortBy(sortParam);
-  }, [searchParams]);
-
-  // Fetch user session and library entries
-  useEffect(() => {
-    async function fetchSessionAndLibrary() {
-      try {
-        const supabase = createClient();
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-
-        setUserId(user ? user.id : null);
-
-        if (user) {
-          // Fetch library entries for the user
-          const { data, error } = await supabase
-            .from("user_anime_library")
-            .select("*")
-            .eq("user_id", user.id);
-
-          if (error) throw error;
-          setLibraryEntries(data);
-        } else {
-          setLibraryEntries(undefined);
-        }
-      } catch (err) {
-        console.error("Failed to fetch session or library:", err);
-        setLibraryEntries(undefined);
-        setUserId(null);
-      }
+  const update = (changes: Record<string, string>) => {
+    const params = new URLSearchParams(searchParams.toString());
+    for (const [key, value] of Object.entries(changes)) {
+      if (value && !(key === "page" && value === "1")) params.set(key, value);
+      else params.delete(key);
     }
+    if (!("page" in changes)) params.delete("page"); // filters reset to page 1
+    router.push(`/anime?${params.toString()}`, { scroll: false });
+  };
 
-    fetchSessionAndLibrary();
-  }, []); // Run once on mount; we could also run on auth state changes, but for simplicity we'll do it once
+  // Keep the box in sync when the URL changes (back button, header search).
+  useEffect(() => setText(search), [search]);
 
-  // Fetch genres and all anime on mount and when search params change
+  // Debounce typing -> URL.
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        // Fetch genres and all anime concurrently
-        const [genres, allAnime] = await Promise.all([
-          getGenres(),
-          getAllAnime(),
-        ]);
-        setGenreData(genres);
-        setAnimeData(allAnime);
-        setLoading(false);
-      } catch (err) {
-        setError("Failed to load data");
-        setLoading(false);
-      }
+    if (text === search) return;
+    const timer = setTimeout(() => update({ search: text.trim() }), 400);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text]);
+
+  // Genres + user + library, once.
+  useEffect(() => {
+    getGenres().then(setGenres).catch(() => {});
+    if (!AUTH_ENABLED) return; // public view: no session or library lookups
+    const supabase = createClient();
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
+      setUserId(user ? user.id : null);
+      if (!user) return;
+      const { data } = await supabase.from("user_anime_library").select("*").eq("user_id", user.id);
+      setLibraryEntries((data as LibraryEntry[] | null) ?? undefined);
+    });
+  }, []);
+
+  // Anime for the current filters.
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setFailed(false);
+    getAnimePage({
+      page,
+      pageSize: PAGE_SIZE,
+      search: search || undefined,
+      genre: genre || undefined,
+      sort,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setItems(res.items);
+        setTotal(res.total);
+      })
+      .catch(() => !cancelled && setFailed(true))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
     };
+  }, [page, search, genre, sort]);
 
-    fetchData();
-  }, [searchParams]); // Refetch when search params change (search, genre, sort)
-
-  // Filter and sort anime based on search query, selected genre, and sortBy
-  const filteredAndSortedAnime = useMemo(() => {
-    const searchQuery = searchParams.get("search") || "";
-    let results = [...animeData];
-
-    // Filter by search query (title or alternative titles)
-    if (searchQuery.trim()) {
-      const lowerQuery = searchQuery.trim().toLowerCase();
-      results = results.filter(
-        (anime) =>
-          anime.title.toLowerCase().includes(lowerQuery) ||
-          (anime.alternativeTitles?.some((alt: string) =>
-            alt.toLowerCase().includes(lowerQuery)
-          ) ?? false)
-      );
-    }
-
-    // Filter by selected genre
-    if (selectedGenre) {
-      results = results.filter((anime) =>
-        anime.genres?.includes(selectedGenre) ?? false
-      );
-    }
-
-    // Sort
-    if (sortBy === "rating") {
-      results.sort((a, b) => (b.averageScore || 0) - (a.averageScore || 0));
-    } else if (sortBy === "year") {
-      results.sort((a, b) => (b.releaseYear || 0) - (a.releaseYear || 0));
-    } else {
-      // popularity: sort by popularity descending
-      results.sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
-    }
-
-    return results;
-  }, [animeData, searchParams, selectedGenre, sortBy]);
-
-  // Handlers for changing genre and sort
-  const handleGenreChange = (genre: string) => {
-    setSelectedGenre(genre);
-    const params = new URLSearchParams(searchParams.toString());
-    if (genre) {
-      params.set("genre", genre);
-    } else {
-      params.delete("genre");
-    }
-    router.push(`/anime?${params.toString()}`);
-  };
-
-  const handleSortChange = (sort: string) => {
-    setSortBy(sort);
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("sort", sort);
-    router.push(`/anime?${params.toString()}`);
-  };
-
-  if (loading) return <Loading />;
-  if (error) return <Error message={error} />;
-  if (animeData.length === 0) return <Empty />;
+  const totalPages = Math.max(Math.ceil(total / PAGE_SIZE), 1);
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-col items-center justify-between flex-wrap md:flex-row md:items-start">
-        <h1 className="text-3xl font-bold text-white">Anime Discovery</h1>
-        <div className="flex flex-col items-center justify-center flex-wrap md:flex-row md:space-x-4 mt-4 md:mt-0">
-          {/* Search input is in the header; we don't duplicate it here */}
-          <div className="flex space-x-3 mt-4 md:mt-0">
-            <select
-              value={selectedGenre}
-              onChange={(e) => handleGenreChange(e.target.value)}
-              className="rounded-lg bg-[#101827/80] border border-white/20 px-4 py-2 text-sm text-[#F4F6FC] placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#7047F5] focus:border-transparent"
-            >
-              <option value="">All Genres</option>
-              {genreData.map((genre) => (
-                <option key={genre.id} value={genre.name}>
-                  {genre.name}
-                </option>
-              ))}
-            </select>
-            <select
-              value={sortBy}
-              onChange={(e) => handleSortChange(e.target.value)}
-              className="rounded-lg bg-[#101827/80] border border-white/20 px-4 py-2 text-sm text-[#F4F6FC] placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#7047F5] focus:border-transparent"
-            >
-              <option value="popularity">Sort by Popularity</option>
-              <option value="rating">Sort by Rating</option>
-              <option value="year">Sort by Year (Newest)</option>
-            </select>
-          </div>
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <h1 className="text-3xl font-bold">Anime Discovery</h1>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <Input
+            type="search"
+            placeholder="Search anime..."
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            className="sm:w-64"
+          />
+          <select
+            aria-label="Genre"
+            value={genre}
+            onChange={(e) => update({ genre: e.target.value })}
+            className={selectClass}
+          >
+            <option value="">All Genres</option>
+            {genres.map((g) => (
+              <option key={g.id} value={g.name}>
+                {g.name}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Sort"
+            value={sort}
+            onChange={(e) => update({ sort: e.target.value })}
+            className={selectClass}
+          >
+            <option value="popularity">Most popular</option>
+            <option value="score">Top rated</option>
+            <option value="newest">Newest</option>
+          </select>
         </div>
       </div>
 
-      {filteredAndSortedAnime.length > 0 ? (
-        <AnimeGrid
-          anime={filteredAndSortedAnime}
-          libraryEntries={libraryEntries}
-          userId={userId}
-          columns={3}
-        />
+      {failed ? (
+        <ErrorState message="Failed to load anime data" />
+      ) : loading ? (
+        <GridSkeleton />
+      ) : items.length === 0 ? (
+        <p className="py-16 text-center text-muted-foreground">No anime found.</p>
       ) : (
-        <Empty title="No anime found" description="Try changing your filters or search term." />
+        <AnimeGrid anime={items} libraryEntries={libraryEntries} userId={userId} columns={3} />
+      )}
+
+      {!failed && total > PAGE_SIZE && (
+        <div className="flex items-center justify-center gap-3">
+          <Button
+            variant="outline"
+            disabled={page <= 1}
+            onClick={() => update({ page: String(page - 1) })}
+          >
+            Previous
+          </Button>
+          <span className="text-sm text-muted-foreground">
+            Page {page} of {totalPages}
+          </span>
+          <Button
+            variant="outline"
+            disabled={page >= totalPages}
+            onClick={() => update({ page: String(page + 1) })}
+          >
+            Next
+          </Button>
+        </div>
       )}
     </div>
+  );
+}
+
+// useSearchParams needs a Suspense boundary or `next build` fails.
+export default function AnimePage() {
+  return (
+    <Suspense fallback={<GridSkeleton />}>
+      <AnimeBrowser />
+    </Suspense>
   );
 }

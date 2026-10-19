@@ -2,6 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ------------------------------------------------------------------ */
+/* 1. THEME TOKENS                                                     */
+/* ------------------------------------------------------------------ */
 @layer base {
   :root {
     --background: 0 0% 100%;
@@ -10,50 +13,406 @@
     --card-foreground: 0 0% 3.9%;
     --popover: 0 0% 100%;
     --popover-foreground: 0 0% 3.9%;
-    --primary: 0 0% 9%;
-    --primary-foreground: 0 0% 98%;
+    --primary: 254 90% 62%;
+    --primary-foreground: 0 0% 100%;
     --secondary: 0 0% 96.1%;
     --secondary-foreground: 0 0% 9%;
     --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
-    --accent: 0 0% 96.1%;
-    --accent-foreground: 0 0% 9%;
+    --muted-foreground: 0 0% 40%;
+    --accent: 254 90% 96%;
+    --accent-foreground: 254 70% 40%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 98%;
     --border: 0 0% 89.8%;
     --input: 0 0% 89.8%;
-    --ring: 0 0% 3.9%;
-    --radius: 0.5rem;
+    --ring: 254 90% 62%;
+    --radius: 0.75rem;
   }
+
   .dark {
-    --background: 225 85% 6%;   /* midnight navy #080D18 */
-    --foreground: 210 5% 98%;   /* soft-white text #F4F6FC */
-    --card: 220 60% 15%;        /* charcoal #101827 */
-    --card-foreground: 210 5% 98%; /* soft-white text #F4F6FC */
-    --popover: 0 0% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 260 80% 65%;     /* electric purple #7047F5 */
-    --primary-foreground: 210 5% 98%; /* soft-white text #F4F6FC */
-    --secondary: 320 70% 60%;   /* neon pink #F05BBD */
-    --secondary-foreground: 225 85% 6%; /* midnight navy #080D18 for text on neon pink */
-    --muted: 220 60% 15%;       /* charcoal #101827 for muted */
-    --muted-foreground: 210 20% 60%; /* gray-400 */
-    --accent: 260 80% 65%;      /* electric purple #7047F5 */
-    --accent-foreground: 210 5% 98%; /* soft-white text #F4F6FC */
-    --destructive: 0 84.2% 60.2%;
+    /* Surfaces step up in lightness so layers are distinguishable */
+    --background: 223 50% 7%;        /* #090E1B  page            */
+    --foreground: 220 30% 96%;       /* #F1F3F9  text            */
+    --card: 222 45% 11%;             /* #0F1829  cards / panels  */
+    --card-foreground: 220 30% 96%;
+    --popover: 222 45% 11%;
+    --popover-foreground: 220 30% 96%;
+    --primary: 254 90% 62%;          /* #7047F5  electric purple */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 222 40% 16%;        /* #19223A  quiet surface   */
+    --secondary-foreground: 220 30% 96%;
+    --muted: 222 40% 16%;
+    --muted-foreground: 217 20% 68%; /* readable secondary text  */
+    --accent: 320 83% 65%;           /* #F05BBD  neon pink       */
+    --accent-foreground: 223 50% 7%;
+    --destructive: 0 72% 55%;
     --destructive-foreground: 0 0% 98%;
-    --border: 220 60% 15%;      /* charcoal #101827 for border */
-    --input: 220 60% 15%;       /* charcoal #101827 for input */
-    --ring: 260 80% 65%;        /* electric purple #7047F5 for ring */
-    --radius: 0.5rem;
+    --border: 221 35% 19%;           /* #1F2A44  visible borders */
+    --input: 221 35% 19%;
+    --ring: 254 90% 70%;
+    --radius: 0.75rem;
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* 2. BASE                                                             */
+/* ------------------------------------------------------------------ */
 @layer base {
   * {
     @apply border-border;
   }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  h1, h2, h3, h4 {
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  /* Images never overflow; broken images keep their box and stay tidy */
+  img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+  }
+  img[alt] {
+    font-size: 0.75rem;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--secondary));
+  }
+
+  /* Form controls: consistent look, no text/button collisions */
+  input, select, textarea {
+    @apply bg-secondary text-foreground border border-input;
+    border-radius: var(--radius);
+    padding: 0.55rem 0.9rem;
+    line-height: 1.4;
+  }
+  input::placeholder {
+    color: hsl(var(--muted-foreground));
+  }
+  input:focus-visible, textarea:focus-visible, select:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 1px;
+  }
+
+  a, button {
+    transition: color .15s ease, background-color .15s ease,
+                border-color .15s ease, opacity .15s ease;
+  }
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
+  /* Dark scrollbar */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 999px;
+  }
+  ::selection {
+    background: hsl(var(--primary) / .4);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; scroll-behavior: auto !important; }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 3. LAYOUT + COMPONENT CLASSES                                       */
+/*    Use these in your JSX (see usage notes below the file).          */
+/* ------------------------------------------------------------------ */
+@layer components {
+
+  /* ---- App shell: header on top, sidebar left, content right ---- */
+  .app-shell {
+    display: grid;
+    grid-template-columns: 240px minmax(0, 1fr);
+    grid-template-rows: 64px minmax(0, 1fr);
+    grid-template-areas:
+      "header  header"
+      "sidebar main";
+    min-height: 100vh;
+  }
+  .app-header {
+    grid-area: header;
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    display: grid;
+    grid-template-columns: 1fr minmax(0, 520px) 1fr;
+    align-items: center;
+    gap: 1rem;
+    padding: 0 1.5rem;
+    background: hsl(var(--background) / .85);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid hsl(var(--border));
+  }
+  .app-header > :last-child {
+    justify-self: end;
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+  }
+  .app-sidebar {
+    grid-area: sidebar;
+    position: sticky;
+    top: 64px;
+    height: calc(100vh - 64px);
+    padding: 1rem 0.75rem;
+    border-right: 1px solid hsl(var(--border));
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .nav-link {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 0.9rem;
+    border-radius: var(--radius);
+    font-weight: 500;
+    color: hsl(var(--muted-foreground));
+  }
+  .nav-link:hover {
+    background: hsl(var(--secondary));
+    color: hsl(var(--foreground));
+  }
+  .nav-link[aria-current="page"],
+  .nav-link.is-active {
+    background: hsl(var(--primary) / .15);
+    color: hsl(var(--foreground));
+    box-shadow: inset 3px 0 0 hsl(var(--primary));
+  }
+  .app-main {
+    grid-area: main;
+    min-width: 0;
+    padding: 2rem clamp(1rem, 3vw, 3rem) 4rem;
+  }
+  .container-page {
+    width: 100%;
+    max-width: 1200px;
+    margin-inline: auto;
+  }
+
+  /* ---- Search: input and button joined into one control ---- */
+  .search-bar {
+    display: flex;
+    align-items: stretch;
+    width: 100%;
+    border: 1px solid hsl(var(--input));
+    border-radius: var(--radius);
+    background: hsl(var(--secondary));
+    overflow: hidden;
+  }
+  .search-bar:focus-within {
+    border-color: hsl(var(--ring));
+    box-shadow: 0 0 0 3px hsl(var(--ring) / .25);
+  }
+  .search-bar input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    outline: none;
+    box-shadow: none;
+  }
+  .search-bar button {
+    padding: 0 1.1rem;
+    font-weight: 600;
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+  }
+  .search-bar button:hover { filter: brightness(1.1); }
+
+  /* ---- Buttons ---- */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    height: 2.75rem;
+    padding: 0 1.4rem;
+    border-radius: var(--radius);
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .btn-primary {
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+  }
+  .btn-primary:hover { filter: brightness(1.12); }
+  .btn-outline {
+    border: 1px solid hsl(var(--border));
+    background: transparent;
+    color: hsl(var(--foreground));
+  }
+  .btn-outline:hover { background: hsl(var(--secondary)); }
+
+  /* ---- Hero ---- */
+  .hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 1.25rem;
+    padding: clamp(3rem, 8vw, 6rem) 1.5rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: calc(var(--radius) * 1.5);
+    background:
+      radial-gradient(60% 80% at 50% 0%, hsl(var(--primary) / .22), transparent 70%),
+      hsl(var(--card));
+  }
+  .hero h1 {
+    font-size: clamp(2.25rem, 5vw, 4rem);
+    font-weight: 800;
+  }
+  .hero p {
+    max-width: 60ch;
+    font-size: clamp(1rem, 1.5vw, 1.2rem);
+    color: hsl(var(--muted-foreground));
+  }
+  .hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
+  }
+  .text-gradient {
+    background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--accent)));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* ---- Sections ---- */
+  .section {
+    margin-top: 3rem;
+  }
+  .section-title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-bottom: 1.25rem;
+  }
+
+  /* ---- Anime grid: equal columns, equal-height cards ---- */
+  .anime-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 1.25rem;
+    align-items: stretch;
+  }
+  .anime-card {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius);
+    background: hsl(var(--card));
+    transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
+  }
+  .anime-card:hover {
+    transform: translateY(-3px);
+    border-color: hsl(var(--primary) / .6);
+    box-shadow: 0 10px 30px -10px hsl(var(--primary) / .45);
+  }
+  /* Fixed poster ratio so every card lines up even if an image fails */
+  .anime-card-poster {
+    position: relative;
+    aspect-ratio: 2 / 3;
+    width: 100%;
+    background: hsl(var(--secondary));
+    overflow: hidden;
+  }
+  .anime-card-poster img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .anime-card-body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 0.9rem 1rem 1rem;
+  }
+  .anime-card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+  .anime-card-title {
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1.3;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .anime-card-score {
+    flex-shrink: 0;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: hsl(var(--primary) / .18);
+    color: hsl(var(--foreground));
+  }
+  .anime-card-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: auto; /* pushes tags/actions to the bottom, aligns cards */
+  }
+  .tag {
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    background: hsl(var(--secondary));
+    color: hsl(var(--muted-foreground));
+    border: 1px solid hsl(var(--border));
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 4. RESPONSIVE                                                       */
+/* ------------------------------------------------------------------ */
+@media (max-width: 900px) {
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "header"
+      "main";
+  }
+  .app-sidebar { display: none; } /* swap for a mobile menu / bottom nav */
+  .app-header {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding: 0 1rem;
   }
 }

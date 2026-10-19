@@ -26,6 +26,8 @@ interface Report {
   // Content info (depends on content_type)
   anime_title: string;
   content_preview: string; // short preview of the content
+  user_id?: string;
+  content_author_user_id?: string;
   content_author_username: string;
   content_author_avatar_url: string | null;
 }
@@ -85,123 +87,142 @@ export default function ModerationPage() {
         setLoading(true);
         const supabase = createClient();
 
-        // We'll fetch reports and then fetch related data in parallel
+        // Fetch reports
         const { data: reportsData, error: reportsError } = await supabase
           .from("content_reports")
-          .select(`
-            id,
-            reporter_id,
-            content_type,
-            content_id,
-            reason,
-            explanation,
-            status,
-            resolver_id,
-            resolution_notes,
-            created_at,
-            reporter:profiles!reporter_id (
-              username,
-              avatar_url
-            )
-          `)
+          .select("id, reporter_id, content_type, content_id, reason, explanation, status, resolver_id, resolution_notes, created_at")
           .order("created_at", { ascending: false });
 
         if (reportsError) throw reportsError;
 
-        // For each report, fetch content details
+        // For each report, fetch reporter, content, and anime details
         const reportsWithDetails: Report[] = [];
 
-        for (const report of reportsData) {
+        for (const report of (reportsData || [])) {
           let anime_title = "";
           let content_preview = "";
+          let content_author_user_id = "";
           let content_author_username = "";
           let content_author_avatar_url: string | null = null;
+          let reporter_username = "";
+          let reporter_avatar_url: string | null = null;
+
+          // Fetch reporter profile
+          if (report.reporter_id) {
+            const { data: reporterProfile } = await supabase
+              .from("profiles")
+              .select("username, avatar_url")
+              .eq("id", report.reporter_id)
+              .maybeSingle();
+
+            if (reporterProfile) {
+              reporter_username = reporterProfile.username || "";
+              reporter_avatar_url = reporterProfile.avatar_url || null;
+            }
+          }
 
           if (report.content_type === "review") {
-            const { data: reviewData, error: reviewError } = await supabase
+            const { data: reviewData } = await supabase
               .from("anime_reviews")
-              .select(`
-                id,
-                body,
-                title,
-                anime_id,
-                anime:anime_id (
-                  title
-                ),
-                author:profiles!user_id (
-                  username,
-                  avatar_url
-                )
-              `)
+              .select("id, body, title, anime_id, user_id")
               .eq("id", report.content_id)
-              .single();
+              .maybeSingle();
 
-            if (!reviewError && reviewData) {
-              anime_title = reviewData.anime?.title || "";
+            if (reviewData) {
               content_preview = reviewData.title || reviewData.body.substring(0, 100);
-              content_author_username = reviewData.author?.username || "";
-              content_author_avatar_url = reviewData.author?.avatar_url || null;
+              content_author_user_id = reviewData.user_id;
+
+              const { data: authorProfile } = await supabase
+                .from("profiles")
+                .select("username, avatar_url")
+                .eq("id", reviewData.user_id)
+                .maybeSingle();
+
+              if (authorProfile) {
+                content_author_username = authorProfile.username || "";
+                content_author_avatar_url = authorProfile.avatar_url || null;
+              }
+
+              const { data: animeRow } = await supabase
+                .from("anime")
+                .select("title_romaji, title_english")
+                .or(`external_id.eq.${reviewData.anime_id},id.eq.${reviewData.anime_id}`)
+                .maybeSingle();
+
+              anime_title = animeRow?.title_english || animeRow?.title_romaji || `Anime ${reviewData.anime_id}`;
             }
           } else if (report.content_type === "comment") {
-            const { data: commentData, error: commentError } = await supabase
+            const { data: commentData } = await supabase
               .from("anime_comments")
-              .select(`
-                id,
-                body,
-                is_spoiler,
-                anime_id,
-                anime:anime_id (
-                  title
-                ),
-                author:profiles!user_id (
-                  username,
-                  avatar_url
-                )
-              `)
+              .select("id, body, is_spoiler, anime_id, user_id")
               .eq("id", report.content_id)
-              .single();
+              .maybeSingle();
 
-            if (!commentError && commentData) {
-              anime_title = commentData.anime?.title || "";
-              // If spoiler, we might want to show a note
+            if (commentData) {
               content_preview = commentData.is_spoiler
                 ? "[Spoiler hidden]"
                 : commentData.body.substring(0, 100);
-              content_author_username = commentData.author?.username || "";
-              content_author_avatar_url = commentData.author?.avatar_url || null;
+              content_author_user_id = commentData.user_id;
+
+              const { data: authorProfile } = await supabase
+                .from("profiles")
+                .select("username, avatar_url")
+                .eq("id", commentData.user_id)
+                .maybeSingle();
+
+              if (authorProfile) {
+                content_author_username = authorProfile.username || "";
+                content_author_avatar_url = authorProfile.avatar_url || null;
+              }
+
+              const { data: animeRow } = await supabase
+                .from("anime")
+                .select("title_romaji, title_english")
+                .or(`external_id.eq.${commentData.anime_id},id.eq.${commentData.anime_id}`)
+                .maybeSingle();
+
+              anime_title = animeRow?.title_english || animeRow?.title_romaji || `Anime ${commentData.anime_id}`;
             }
           } else if (report.content_type === "rating") {
-            const { data: ratingData, error: ratingError } = await supabase
+            const { data: ratingData } = await supabase
               .from("anime_ratings")
-              .select(`
-                id,
-                rating,
-                anime_id,
-                anime:anime_id (
-                  title
-                ),
-                author:profiles!user_id (
-                  username,
-                  avatar_url
-                )
-              `)
+              .select("id, rating, anime_id, user_id")
               .eq("id", report.content_id)
-              .single();
+              .maybeSingle();
 
-            if (!ratingError && ratingData) {
-              anime_title = ratingData.anime?.title || "";
+            if (ratingData) {
               content_preview = `Rating: ${ratingData.rating}/10`;
-              content_author_username = ratingData.author?.username || "";
-              content_author_avatar_url = ratingData.author?.avatar_url || null;
+              content_author_user_id = ratingData.user_id;
+
+              const { data: authorProfile } = await supabase
+                .from("profiles")
+                .select("username, avatar_url")
+                .eq("id", ratingData.user_id)
+                .maybeSingle();
+
+              if (authorProfile) {
+                content_author_username = authorProfile.username || "";
+                content_author_avatar_url = authorProfile.avatar_url || null;
+              }
+
+              const { data: animeRow } = await supabase
+                .from("anime")
+                .select("title_romaji, title_english")
+                .or(`external_id.eq.${ratingData.anime_id},id.eq.${ratingData.anime_id}`)
+                .maybeSingle();
+
+              anime_title = animeRow?.title_english || animeRow?.title_romaji || `Anime ${ratingData.anime_id}`;
             }
           }
 
           reportsWithDetails.push({
             ...report,
-            reporter_username: report.reporter?.username || "",
-            reporter_avatar_url: report.reporter?.avatar_url || null,
+            reporter_username,
+            reporter_avatar_url,
             anime_title,
             content_preview,
+            user_id: content_author_user_id,
+            content_author_user_id,
             content_author_username,
             content_author_avatar_url,
           });
@@ -226,29 +247,34 @@ export default function ModerationPage() {
         const supabase = createClient();
         const { data: restrictionsData, error: restrictionsError } = await supabase
           .from("user_restrictions")
-          .select(`
-            id,
-            user_id,
-            reason,
-            restricted_until,
-            created_at,
-            created_by,
-            user:user_id (
-              username,
-              avatar_url
-            )
-          `)
+          .select("id, user_id, reason, restricted_until, created_at, created_by")
           .order("created_at", { ascending: false });
 
         if (restrictionsError) throw restrictionsError;
 
-        setUserRestrictions(
-          restrictionsData.map((r: any) => ({
+        const enrichedRestrictions: UserRestriction[] = [];
+        for (const r of (restrictionsData || [])) {
+          let username = "Unknown user";
+          let avatar_url: string | null = null;
+          if (r.user_id) {
+            const { data: prof } = await supabase
+              .from("profiles")
+              .select("username, avatar_url")
+              .eq("id", r.user_id)
+              .maybeSingle();
+            if (prof) {
+              username = prof.username || "Unknown user";
+              avatar_url = prof.avatar_url || null;
+            }
+          }
+          enrichedRestrictions.push({
             ...r,
-            username: r.user?.username || "",
-            avatar_url: r.user?.avatar_url || null,
-          }))
-        );
+            username,
+            avatar_url,
+          });
+        }
+
+        setUserRestrictions(enrichedRestrictions);
       } catch (err: any) {
         console.error("Failed to load restrictions:", err);
       }
@@ -606,7 +632,7 @@ export default function ModerationPage() {
                 <h2 className="text-xl font-semibold text-white mb-2">Add Restriction for User</h2>
                 <p className="text-gray-400 mb-4">
                   You are about to restrict the user who posted the following content:
-                </div>
+                </p>
                 <div className="border border-gray-600 rounded-lg p-3 mb-4">
                   <p className="text-gray-200">
                     <strong>Content:</strong> {selectedReport.content_preview}
@@ -660,8 +686,7 @@ export default function ModerationPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => setSelectedReport(null)}
-                    className="hover:bg-gray-700"
-                    ml={2}
+                    className="hover:bg-gray-700 ml-2"
                   >
                     Cancel
                   </Button>

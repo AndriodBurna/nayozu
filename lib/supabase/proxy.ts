@@ -2,6 +2,13 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { hasEnvVars } from "../utils";
 
+// Pages that need a signed-in user. Everything else is public.
+// (Add "/admin" back here when the admin panel is built.)
+const PROTECTED_PATHS = ["/library", "/profile", "/admin", "/protected"];
+
+const isProtectedPath = (pathname: string) =>
+  PROTECTED_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
@@ -47,13 +54,9 @@ export async function updateSession(request: NextRequest) {
   const { data } = await supabase.auth.getClaims();
   const user = data?.claims;
 
-  if (
-    request.nextUrl.pathname !== "/" &&
-    !user &&
-    !request.nextUrl.pathname.startsWith("/login") &&
-    !request.nextUrl.pathname.startsWith("/auth")
-  ) {
-    // no user, potentially respond by redirecting the user to the login page
+  // Only private pages redirect to login. The home page, /anime and
+  // /anime/[slug] are public.
+  if (!user && isProtectedPath(request.nextUrl.pathname)) {
     const url = request.nextUrl.clone();
     url.pathname = "/auth/login";
     return NextResponse.redirect(url);

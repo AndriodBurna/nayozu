@@ -19,24 +19,25 @@ export class MockAnimeProvider implements AnimeProvider {
     const start = (page - 1) * pageSize;
     const paginatedResults = results.slice(start, start + pageSize);
     return {
-      results: paginatedResults,
+      results: paginatedResults as unknown as Anime[],
       total: results.length,
       hasMore: results.length > start + pageSize,
     };
   }
 
-  async getAnimeById(id: number): Promise<Anime> {
+  async getAnimeById(id: string | number): Promise<Anime> {
     await delay(300);
-    const anime = mockAnime.find(a => a.id === id);
+    const anime = mockAnime.find(a => String(a.id) === String(id));
     if (!anime) {
       throw new Error(`Anime with id ${id} not found`);
     }
-    return anime;
+    return anime as unknown as Anime;
   }
 
-  async getAnimesByIds(ids: number[]): Promise<Anime[]> {
+  async getAnimesByIds(ids: Array<string | number>): Promise<Anime[]> {
     await delay(300);
-    return mockAnime.filter(anime => ids.includes(anime.id));
+    const stringIds = ids.map(String);
+    return mockAnime.filter(anime => stringIds.includes(String(anime.id))) as unknown as Anime[];
   }
 
   async getGenres(): Promise<Genre[]> {
@@ -44,23 +45,19 @@ export class MockAnimeProvider implements AnimeProvider {
     return mockGenres;
   }
 
-  async getAnimesByGenre(genreId: number, page = 1): Promise<AnimeSearchResult> {
+  async getAnimesByGenre(genreId: string | number, page = 1): Promise<AnimeSearchResult> {
     await delay(500);
+    const genreName = mockGenres.find(g => String(g.id) === String(genreId))?.name || "";
     const results = mockAnime.filter(anime =>
-      anime.genres?.includes(mockGenres.find(g => g.id === genreId)?.name || "")
+      anime.genres?.includes(genreName)
     );
     const pageSize = 10;
     const start = (page - 1) * pageSize;
     const paginatedResults = results.slice(start, start + pageSize);
     return {
-      results: paginatedResults,
+      results: paginatedResults as unknown as Anime[],
       total: results.length,
       hasMore: results.length > start + pageSize,
     };
-  }
-
-  async getAllAnime(): Promise<Anime[]> {
-    await delay(300);
-    return mockAnime;
   }
 }

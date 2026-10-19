@@ -1,6 +1,7 @@
 "use client";
 
-import { redirect } from "next/navigation";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -10,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { cn } from "@/lib/utils";
 
 export default function ProfilePage() {
+  const router = useRouter();
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -26,7 +28,7 @@ export default function ProfilePage() {
     } = await supabase.auth.getUser();
 
     if (!user) {
-      redirect("/auth/login");
+      router.push("/auth/login");
       return;
     }
 
@@ -55,7 +57,7 @@ export default function ProfilePage() {
     } = await supabase.auth.getUser();
 
     if (!user) {
-      redirect("/auth/login");
+      router.push("/auth/login");
       return;
     }
 
@@ -202,12 +204,12 @@ export default function ProfilePage() {
               Your personal anime library will appear here once you add some anime.
             </p>
             <div className="mt-4 text-center">
-              <a
+              <Link
                 href="/library"
                 className="text-[#7047F5] hover:underline"
               >
                 View Your Library →
-              </a>
+              </Link>
             </div>
           </div>
         </div>

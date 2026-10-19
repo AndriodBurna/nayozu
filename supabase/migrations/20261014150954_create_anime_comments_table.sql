@@ -1,6 +1,6 @@
 -- Create anime_comments table
 create table public.anime_comments (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users not null,
   anime_id text not null, -- stable external anime ID
   parent_comment_id uuid references public.anime_comments(id), -- for replies, null for top-level comment
@@ -39,10 +39,7 @@ create policy "Users can delete their own comments"
 create trigger set_anime_comments_updated_at
   before update on public.anime_comments
   for each row
-  execute function moddatetime ();
-
--- Create extension for moddatetime if not exists
-create extension if not exists "moddatetime" schema public;
+  execute function extensions.moddatetime(updated_at);
 
 -- Create indexes for common queries
 create index idx_anime_comments_anime_id on public.anime_comments(anime_id);

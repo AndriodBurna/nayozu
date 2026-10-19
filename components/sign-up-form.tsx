@@ -46,7 +46,6 @@ export function SignUpForm({
         password,
         options: {
           emailRedirectTo: `${window.location.origin}/auth/sign-up-success`,
-          emailConfirm: false, // Automatically confirm email (for development)
         },
       });
       if (signUpError) throw signUpError;

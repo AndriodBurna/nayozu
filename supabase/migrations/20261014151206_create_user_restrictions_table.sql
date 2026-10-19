@@ -1,6 +1,6 @@
 -- Create user_restrictions table
 create table public.user_restrictions (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users not null,
   reason text not null,
   restricted_until timestamptz, -- null means indefinite restriction, or a future timestamp
@@ -18,28 +18,20 @@ create policy "Users can view their own restrictions"
 
 create policy "Moderators and admins can view all restrictions"
   on public.user_restrictions for select
-  using ( exists (select 1 from public.user_roles where user_id = auth.uid() and role in ('moderator', 'admin')) );
+  using ( public.is_moderator_or_admin(auth.uid()) );
 
 create policy "Only moderators and admins can insert restrictions"
   on public.user_restrictions for insert
-  with check (
-    exists (select 1 from public.user_roles where user_id = auth.uid() and role in ('moderator', 'admin'))
-  );
+  with check ( public.is_moderator_or_admin(auth.uid()) );
 
 create policy "Only moderators and admins can update restrictions"
   on public.user_restrictions for update
-  using (
-    exists (select 1 from public.user_roles where user_id = auth.uid() and role in ('moderator', 'admin'))
-  )
-  with check (
-    exists (select 1 from public.user_roles where user_id = auth.uid() and role in ('moderator', 'admin'))
-  );
+  using ( public.is_moderator_or_admin(auth.uid()) )
+  with check ( public.is_moderator_or_admin(auth.uid()) );
 
 create policy "Only moderators and admins can delete restrictions"
   on public.user_restrictions for delete
-  using (
-    exists (select 1 from public.user_roles where user_id = auth.uid() and role in ('moderator', 'admin'))
-  );
+  using ( public.is_moderator_or_admin(auth.uid()) );
 
 -- Create indexes for common queries
 create index idx_user_restrictions_user_id on public.user_restrictions(user_id);

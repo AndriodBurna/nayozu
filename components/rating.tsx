@@ -30,6 +30,22 @@ export default function Rating({ animeId, onRatingChange }: RatingProps) {
         } = await supabase.auth.getUser();
         setUserId(user ? user.id : null);
 
+        // Fetch aggregate rating and count
+        const { data: aggregateData, error: aggregateError } = await supabase
+          .from("anime_ratings")
+          .select("rating", { count: "exact" })
+          .eq("anime_id", animeId);
+
+        if (aggregateError) throw aggregateError;
+
+        const ratings = (aggregateData || []).map((r: any) => r.rating);
+        const count = ratings.length;
+        const sum = ratings.reduce((acc: number, val: number) => acc + val, 0);
+        const avg = count > 0 ? sum / count : null;
+
+        setRatingCount(count);
+        setAverageRating(avg);
+
         if (user) {
           // Fetch user's rating for this anime
           const { data: userRatingData, error: userRatingError } = await supabase
@@ -37,33 +53,15 @@ export default function Rating({ animeId, onRatingChange }: RatingProps) {
             .select("rating")
             .eq("user_id", user.id)
             .eq("anime_id", animeId)
-            .single();
+            .maybeSingle();
 
           if (userRatingError && userRatingError.code !== "PGRST116") {
             throw userRatingError;
           }
           setUserRating(userRatingData?.rating ?? null);
-
-          // Fetch aggregate rating and count
-          const { data: aggregateData, error: aggregateError } = await supabase
-            .from("anime_ratings")
-            .select("rating", { count: "exact" })
-            .eq("animeId", animeId);
-
-          if (aggregateError) throw aggregateError;
-
-          const ratings = aggregateData.map((r: any) => r.rating);
-          const count = ratings.length;
-          const sum = ratings.reduce((acc: number, val: number) => acc + val, 0);
-          const avg = count > 0 ? sum / count : null;
-
-          setRatingCount(count);
-          setAverageRating(avg);
         } else {
           setUserId(null);
           setUserRating(null);
-          setAverageRating(null);
-          setRatingCount(0);
         }
       } catch (err: any) {
         setError(err.message || "Failed to load rating data");
@@ -94,7 +92,7 @@ export default function Rating({ animeId, onRatingChange }: RatingProps) {
             rating: rating,
             updated_at: new Date().toISOString(),
           },
-          { onConflict: ["user_id", "anime_id"] }
+          { onConflict: "user_id,anime_id" }
         );
 
       if (error) throw error;

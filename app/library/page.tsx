@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
-import { getAnimesByIds } from "@/lib/services/animeService";
+import { getAnimesByExternalIds } from "@/lib/services/animeService";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,30 +50,24 @@ export default function LibraryPage() {
         return;
       }
 
-      // Extract anime IDs
+      // Extract anime IDs (stored as text AniList external_ids)
       const animeIds = libraryData.map((entry) => entry.anime_id);
-      // Note: anime_id in our library is stored as text, but our anime service expects numeric IDs.
-      // We need to check the type of anime_id in our mock data. In mockData.ts, the anime id is a number.
-      // We stored anime_id as text in the library table, but we should store it as the same type as the anime id.
-      // Let's change the library table to store anime_id as integer? However, the external anime ID might not be numeric.
-      // For now, we assume the anime ID is numeric (as in our mock data). We'll convert to number.
-      const numericAnimeIds = animeIds.map((id) => parseInt(id, 10));
 
-      // Fetch anime data for these IDs
-      const animeData = await getAnimesByIds(numericAnimeIds);
+      // Fetch anime data for these external IDs
+      const animeData = await getAnimesByExternalIds(animeIds);
       // Create a map for quick lookup
       const animeMap = new Map();
       animeData.forEach((anime) => {
-        animeMap.set(anime.id, anime);
+        animeMap.set(String(anime.external_id), anime);
       });
 
       // Combine library entry with anime data
       const combined = libraryData
         .map((entry) => {
-          const anime = animeMap.get(parseInt(entry.anime_id, 10));
+          const anime = animeMap.get(String(entry.anime_id));
           return { library_entry: entry, anime: anime };
         })
-        .filter((item) => item.anime !== undefined); // filter out if anime not found (should not happen)
+        .filter((item) => item.anime !== undefined); // filter out if anime not found
 
       setLibrary(combined);
     } catch (err: any) {
@@ -153,9 +148,9 @@ export default function LibraryPage() {
           <div className="bg-[#101827/80] rounded-lg p-12 text-center">
             <p className="text-gray-400">Your library is empty. Add anime to your library from the anime discovery page.</p>
             <div className="mt-6">
-              <a href="/anime" className="text-[#7047F5] hover:underline">
+              <Link href="/anime" className="text-[#7047F5] hover:underline">
                 Browse Anime
-              </a>
+              </Link>
             </div>
           </div>
         ) : (
@@ -171,20 +166,20 @@ export default function LibraryPage() {
                     <div className="flex flex-col items-center">
                       {/* Anime Cover */}
                       <div className="mb-4">
-                        <a href={`/anime/${anime.id}`} className="block">
+                        <Link href={`/anime/${anime.slug || anime.id}`} className="block">
                           <img
                             src={anime.coverImage}
                             alt={anime.title}
                             className="w-48 h-72 object-cover rounded-lg shadow-lg hover:shadow-xl transition-shadow"
                           />
-                        </a>
+                        </Link>
                       </div>
 
                       {/* Anime Title */}
                       <h2 className="text-xl font-bold text-white mb-2">
-                        <a href={`/anime/${anime.id}`} className="hover:underline">
+                        <Link href={`/anime/${anime.slug || anime.id}`} className="hover:underline">
                           {anime.title}
-                        </a>
+                        </Link>
                       </h2>
 
                       {/* Status and Progress */}
