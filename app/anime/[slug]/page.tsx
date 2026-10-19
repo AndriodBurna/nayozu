@@ -1,424 +1,175 @@
-"use client";
-
+import { cache } from "react";
 import Link from "next/link";
-import { useState, useEffect } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { getAnimeBySlug } from "@/lib/services/animeService";
-import { createClient } from "@/lib/supabase/client";
-import { Button } from "@/components/ui/button";
 import Image from "next/image";
-import AnimeCard from "@/components/anime-card";
-import Loading from "@/components/loading";
-import Error from "@/components/error";
-import Empty from "@/components/empty";
+import type { Metadata } from "next";
+import { notFound } from "next/navigation";
+import AnimeCarousel from "@/components/anime-carousel";
+import CommentList from "@/components/comment-list";
+import ErrorState from "@/components/error";
+import { Badge } from "@/components/ui/badge";
+import { AUTH_ENABLED } from "@/lib/features";
+import { normalizeAnime, type AnimeRow } from "@/lib/services/normalizeAnime";
+import { createClient } from "@/lib/supabase/server";
 
-export default function AnimeDetailPage() {
-  const { slug } = useParams<{ slug: string }>();
-  const router = useRouter();
+const WITH_GENRES = "*, anime_genres(genres(name))";
 
-  const [anime, setAnime] = useState<any>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-  const [libraryEntry, setLibraryEntry] = useState<any>(null);
-  const [userId, setUserId] = useState<string | null>(null);
-  const [isAdding, setIsAdding] = useState(false);
-  const [isUpdating, setIsUpdating] = useState(false);
-  const [newStatus, setNewStatus] = useState<string>("planned");
-  const [newProgress, setNewProgress] = useState<number>(0);
+const pretty = (s: string) => s.toLowerCase().replace(/_/g, " ");
 
-  // Fetch user session and library entry for this anime
-  useEffect(() => {
-    async function fetchSessionAndLibrary() {
-      try {
-        const supabase = createClient();
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
+// cache(): generateMetadata and the page share one query per request.
+const getAnime = cache(async (slug: string) => {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("anime")
+    .select(WITH_GENRES)
+    .eq("slug", slug)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? normalizeAnime(data as unknown as AnimeRow) : null;
+});
 
-        setUserId(user ? user.id : null);
+type Props = { params: Promise<{ slug: string }> };
 
-        if (user && anime) {
-          // Fetch library entry for this user and anime
-          const { data, error } = await supabase
-            .from("user_anime_library")
-            .select("*")
-            .eq("user_id", user.id)
-            .eq("anime_id", String(anime.external_id))
-            .single();
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { slug } = await params;
+  try {
+    const anime = await getAnime(slug);
+    if (!anime) return { title: "Not found | Nayozu" };
+    return {
+      title: `${anime.title} | Nayozu`,
+      description: anime.synopsis?.slice(0, 160) ?? undefined,
+    };
+  } catch {
+    return { title: "Nayozu" };
+  }
+}
 
-          if (error && error.code !== "PGRST116") {
-            // PGRST116 means no rows returned, which is fine
-            console.error("Failed to fetch library entry:", error);
-          }
-          setLibraryEntry(data);
-        } else {
-          setLibraryEntry(null);
-        }
-      } catch (err) {
-        console.error("Failed to fetch session or library:", err);
-        setLibraryEntry(null);
-        setUserId(null);
-      }
-    }
+export default async function AnimeDetailPage({ params }: Props) {
+  const { slug } = await params;
 
-    fetchSessionAndLibrary();
-  }, [anime]);
+  let anime: Awaited<ReturnType<typeof getAnime>>;
+  try {
+    anime = await getAnime(slug);
+  } catch (err) {
+    const e = err as { message?: string; code?: string };
+    console.error("Failed to load anime:", slug, e?.message, e?.code);
+    return <ErrorState message="Failed to load anime details" />;
+  }
+  if (!anime) notFound();
 
-  // Fetch anime data by slug
-  useEffect(() => {
-    async function fetchAnime() {
-      if (!slug) return;
-      setLoading(true);
-      setError(null);
-      try {
-        const data = await getAnimeBySlug(slug);
-        setAnime(data);
-        setLoading(false);
-      } catch (err: any) {
-        console.error("Failed to fetch anime by slug:", err);
-        setError("Failed to load anime details");
-        setLoading(false);
-      }
-    }
+  // "More to explore": most popular titles other than this one (non-fatal if it fails)
+  const supabase = await createClient();
+  const { data: moreData } = await supabase
+    .from("anime")
+    .select(WITH_GENRES)
+    .neq("id", anime.id)
+    .order("popularity", { ascending: false, nullsFirst: false })
+    .order("id")
+    .limit(6);
+  const more = ((moreData ?? []) as unknown as AnimeRow[]).map(normalizeAnime);
 
-    fetchAnime();
-  }, [slug]);
-
-  // Handle adding to library
-  const handleAddToLibrary = async () => {
-    setIsAdding(true);
-    try {
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        router.push("/auth/login");
-        return;
-      }
-
-      const { error } = await supabase
-        .from("user_anime_library")
-        .insert({
-          user_id: user.id,
-          anime_id: String(anime.external_id),
-          status: "planned",
-          progress: 0,
-        });
-
-      if (error) throw error;
-
-      // Refetch library entry
-      const { data } = await supabase
-        .from("user_anime_library")
-        .select("*")
-        .eq("user_id", user.id)
-        .eq("anime_id", String(anime.external_id))
-        .single();
-
-      setLibraryEntry(data);
-      setIsAdding(false);
-    } catch (err) {
-      console.error("Failed to add to library:", err);
-      setIsAdding(false);
-    }
-  };
-
-  // Handle updating library entry
-  const handleUpdateLibrary = async () => {
-    setIsUpdating(true);
-    try {
-      if (!libraryEntry) return;
-
-      const supabase = createClient();
-      const { error } = await supabase
-        .from("user_anime_library")
-        .update({
-          status: newStatus,
-          progress: newProgress,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", libraryEntry.id);
-
-      if (error) throw error;
-
-      // Update local library entry
-      setLibraryEntry((prev: any) => {
-        if (!prev) return prev;
-        return { ...prev, status: newStatus, progress: newProgress };
-      });
-
-      setIsUpdating(false);
-    } catch (err) {
-      console.error("Failed to update library entry:", err);
-      setIsUpdating(false);
-    }
-  };
-
-  // Handle removing from library
-  const handleRemoveFromLibrary = async () => {
-    if (!libraryEntry) return;
-    try {
-      const supabase = createClient();
-      const { error } = await supabase
-        .from("user_anime_library")
-        .delete()
-        .eq("id", libraryEntry.id);
-
-      if (error) throw error;
-
-      setLibraryEntry(null);
-    } catch (err) {
-      console.error("Failed to remove from library:", err);
-    }
-  };
-
-  if (loading) return <Loading />;
-  if (error) return <Error message={error} />;
-  if (!anime) return <Empty />;
+  const facts: Array<[string, string | number | null | undefined]> = [
+    ["English title", anime.titleEnglish],
+    ["Format", anime.format],
+    ["Episodes", anime.episodeCount],
+    ["Status", anime.status ? pretty(anime.status) : null],
+    ["Season", [anime.releaseSeason?.toLowerCase(), anime.releaseYear].filter(Boolean).join(" ")],
+    ["Score", anime.averageScore ? `${anime.averageScore}/100` : null],
+    ["Popularity", anime.popularity?.toLocaleString()],
+  ];
 
   return (
-    <div className="min-h-screen bg-[#080D18] text-[#F4F6FC] p-6">
-      <div className="max-w-4xl mx-auto">
-        <div className="mb-6">
-          <Link href="/anime" className="text-sm text-gray-400 hover:underline">
-            ← Back to Anime List
-          </Link>
-          <h1 className="text-2xl font-bold text-white mt-2">{anime.title}</h1>
-          <p className="text-sm text-gray-400">
-            {anime.releaseYear} • {anime.genres?.map((g: any) => (typeof g === "string" ? g : g?.name)).filter(Boolean).join(", ")}
-          </p>
-        </div>
+    <div className="flex flex-col gap-10">
+      <div>
+        <Link href="/anime" className="text-sm text-muted-foreground hover:underline">
+          ← Back to Anime
+        </Link>
+      </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left column: Image and basic info */}
-          <div className="lg:row-span-2">
-            <div className="aspect-w-16 aspect-h-9 mb-4">
+      {anime.bannerImage && (
+        <div className="relative h-40 overflow-hidden rounded-xl border sm:h-56">
+          <Image
+            src={anime.bannerImage}
+            alt=""
+            fill
+            priority
+            sizes="(min-width: 1152px) 1100px, 100vw"
+            className="object-cover"
+          />
+        </div>
+      )}
+
+      <div className="flex flex-col gap-8 sm:flex-row">
+        {/* Poster */}
+        <div className="w-44 shrink-0 sm:w-56">
+          <div className="anime-card-poster overflow-hidden rounded-xl border">
+            {anime.image ? (
               <Image
-                src={anime.coverImage}
+                src={anime.image}
                 alt={anime.title}
                 fill
-                style={{ objectFit: "cover", objectPosition: "center" }}
-                className="rounded-lg"
+                priority
+                sizes="224px"
+                className="object-cover"
               />
-            </div>
-
-            <div className="space-y-4">
-              <div className="flex items-center text-sm text-gray-400">
-                {anime.averageScore}/100
+            ) : (
+              <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+                No image
               </div>
-
-              {anime.synopsis && (
-                <p className="text-sm text-gray-300">{anime.synopsis}</p>
-              )}
-
-              <div className="flex flex-wrap gap-2 mb-4">
-                {anime.genres?.map((genre: any) => {
-                  const name = typeof genre === "string" ? genre : genre?.name;
-                  if (!name) return null;
-                  return (
-                    <span key={name} className="bg-[#101827/60] px-2 py-0.5 rounded">
-                      {name}
-                    </span>
-                  );
-                })}
-              </div>
-
-              <div className="flex items-center space-x-4">
-                <span className="text-sm text-gray-400">
-                  {anime.episodeCount} episodes
-                </span>
-                <span className="text-sm text-gray-400">
-                  {anime.releaseSeason} {anime.releaseYear}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Right column: Library controls and additional info */}
-          <div className="space-y-6">
-            {/* Library Controls */}
-            <div className="bg-[#101827/80] rounded-lg p-4">
-              <h2 className="text-lg font-bold text-white mb-4">My Library</h2>
-
-              {!userId ? (
-                // Not authenticated
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    router.push("/auth/login");
-                  }}
-                  className="w-full"
-                >
-                  Sign in to add to library
-                </Button>
-              ) : libraryEntry ? (
-                // In library
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between text-sm text-gray-400">
-                    <span>Status: {libraryEntry.status}</span>
-                    <span>Progress: {libraryEntry.progress}</span>
-                  </div>
-
-                  {!isUpdating ? (
-                    <div className="flex justify-end space-x-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          setIsUpdating(true);
-                          setNewStatus(libraryEntry.status);
-                          setNewProgress(libraryEntry.progress);
-                        }}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        onClick={handleRemoveFromLibrary}
-                        className="bg-red-500 hover:bg-red-600"
-                      >
-                        Remove
-                      </Button>
-                    </div>
-                  ) : (
-                    <>
-                      <form
-                        className="space-y-3"
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          handleUpdateLibrary();
-                        }}
-                      >
-                        <div className="space-y-2">
-                          <label className="block text-sm font-medium text-gray-400">
-                            Status
-                          </label>
-                          <select
-                            value={newStatus}
-                            onChange={(e) => setNewStatus(e.target.value)}
-                            className="block w-full p-2 rounded border border-gray-600 bg-[#101827/80] text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#7047F5]"
-                          >
-                            <option value="planned">Planned</option>
-                            <option value="watching">Watching</option>
-                            <option value="completed">Completed</option>
-                            <option value="on_hold">On Hold</option>
-                            <option value="dropped">Dropped</option>
-                          </select>
-                        </div>
-
-                        <div className="space-y-2">
-                          <label className="block text-sm font-medium text-gray-400">
-                            Progress (Episodes Watched)
-                          </label>
-                          <input
-                            type="number"
-                            min={0}
-                            value={newProgress}
-                            onChange={(e) => setNewProgress(parseInt(e.target.value) || 0)}
-                            className="w-full p-2 rounded border border-gray-600 bg-[#101827/80] text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#7047F5]"
-                          />
-                          <p className="text-xs text-gray-400 mt-1">
-                            Maximum episodes: {anime.episodeCount}
-                          </p>
-                        </div>
-
-                        <div className="flex justify-end space-x-2 mt-4">
-                          <Button
-                            variant="outline"
-                            onClick={() => {
-                              setIsUpdating(false);
-                            }}
-                          >
-                            Cancel
-                          </Button>
-                          <Button
-                            type="submit"
-                            className="bg-[#7047F5] hover:bg-[#5a37f5]"
-                          >
-                            Save Changes
-                          </Button>
-                        </div>
-                      </form>
-                    </>
-                  )}
-                </div>
-              ) : (
-                // Not in library
-                <Button
-                  onClick={handleAddToLibrary}
-                  disabled={isAdding}
-                  className="w-full"
-                >
-                  {isAdding ? "Adding..." : "+ Add to Library"}
-                </Button>
-              )}
-            </div>
-
-            {/* Additional Info (if any) */}
-            <div className="bg-[#101827/80] rounded-lg p-4">
-              <h2 className="text-lg font-bold text-white mb-4">Details</h2>
-              <div className="space-y-2 text-sm text-gray-300">
-                <div>
-                  <span className="font-medium">Title (English): </span>
-                  {anime.titleEnglish || "N/A"}
-                </div>
-                <div>
-                  <span className="font-medium">Average Score: </span>
-                  {anime.averageScore}/100
-                </div>
-                <div>
-                  <span className="font-medium">Popularity: </span>
-                  {anime.popularity}
-                </div>
-                <div>
-                  <span className="font-medium">Trending: </span>
-                  {anime.trending}
-                </div>
-                <div>
-                  <span className="font-medium">Episodes: </span>
-                  {anime.episodeCount}
-                </div>
-                <div>
-                  <span className="font-medium">Season: </span>
-                  {anime.releaseSeason} {anime.releaseYear}
-                </div>
-                <div>
-                  <span className="font-medium">Banner Image: </span>
-                  {anime.bannerImage ? (
-                    <Image
-                      src={anime.bannerImage}
-                      alt={`${anime.title} banner`}
-                      width={400}
-                      height={100}
-                      style={{ objectFit: "cover", objectPosition: "center" }}
-                      className="rounded-lg mt-1"
-                    />
-                  ) : (
-                    <span className="italic">N/A</span>
-                  )}
-                </div>
-              </div>
-            </div>
+            )}
           </div>
         </div>
 
-        {/* Similar Anime Section */}
-        <div className="mt-10">
-          <h2 className="text-xl font-bold text-white mb-4">You Might Also Like</h2>
-          {/* We'll fetch some similar anime based on genres or popularity */}
-          {/* For now, we'll just show some popular anime */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-            {/* Placeholder: we'll fetch data in a separate effect */}
-            {/* We'll implement this later if time permits */}
-            {/* For now, we'll leave it empty or show a message */}
-            <p className="col-span-4 text-center text-gray-400">
-              Similar anime recommendations coming soon.
+        {/* Info */}
+        <div className="min-w-0 flex-1 space-y-5">
+          <div className="space-y-2">
+            <h1 className="text-3xl font-bold">{anime.title}</h1>
+            <p className="text-sm text-muted-foreground">
+              {[anime.releaseYear, anime.format, anime.episodeCount ? `${anime.episodeCount} episodes` : null]
+                .filter(Boolean)
+                .join(" · ")}
             </p>
           </div>
+
+          {anime.genres.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {anime.genres.map((g) => (
+                <Link key={g.name} href={`/anime?genre=${encodeURIComponent(g.name)}`}>
+                  <Badge variant="secondary" className="font-normal hover:bg-secondary/70">
+                    {g.name}
+                  </Badge>
+                </Link>
+              ))}
+            </div>
+          )}
+
+          {anime.synopsis && (
+            <p className="max-w-3xl leading-relaxed text-muted-foreground">{anime.synopsis}</p>
+          )}
+
+          <dl className="grid max-w-3xl grid-cols-1 gap-x-8 gap-y-3 rounded-xl border bg-card p-5 text-sm sm:grid-cols-2">
+            {facts
+              .filter(([, value]) => value !== null && value !== undefined && value !== "")
+              .map(([label, value]) => (
+                <div key={label} className="flex justify-between gap-4 border-b pb-2 last:border-0 sm:[&:nth-last-child(2):nth-child(odd)]:border-0">
+                  <dt className="text-muted-foreground">{label}</dt>
+                  <dd className="text-right font-medium capitalize">{value}</dd>
+                </div>
+              ))}
+          </dl>
         </div>
       </div>
+
+      {/* Comments come back with the authentication work (see lib/features.ts) */}
+      {AUTH_ENABLED && (
+        <section className="space-y-4">
+          <h2 className="text-xl font-bold">Comments</h2>
+          <CommentList animeId={String(anime.external_id)} />
+        </section>
+      )}
+
+      {more.length > 0 && (
+        <AnimeCarousel title="More to explore" anime={more} userId={null} />
+      )}
     </div>
   );
 }

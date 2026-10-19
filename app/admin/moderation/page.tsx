@@ -419,13 +419,13 @@ export default function ModerationPage() {
 
   if (!isModeratorOrAdmin) {
     return (
-      <div className="min-h-screen bg-[#080D18] text-[#F4F6FC] p-6">
+      <div className="min-h-screen bg-background text-foreground p-6">
         <div className="max-w-2xl mx-auto">
-          <h1 className="text-2xl font-bold text-white mb-4">Access Denied</h1>
-          <p className="text-gray-400">
+          <h1 className="text-2xl font-bold text-foreground mb-4">Access Denied</h1>
+          <p className="text-muted-foreground">
             You do not have permission to access the moderation interface.
           </p>
-          <Link href="/" className="text-[#7047F5] hover:underline">
+          <Link href="/" className="text-primary hover:underline">
             ← Return to Home
           </Link>
         </div>
@@ -437,17 +437,17 @@ export default function ModerationPage() {
   if (error) return <div className="flex h-[60vh] items-center justify-center">{error}</div>;
 
   return (
-    <div className="min-h-screen bg-[#080D18] text-[#F4F6FC] p-6">
+    <div className="min-h-screen bg-background text-foreground p-6">
       <div className="max-w-6xl mx-auto">
         <div className="flex flex-col items-center mb-6">
           <Link
             href="/"
-            className="mb-4 text-sm text-[#7047F5] hover:underline"
+            className="mb-4 text-sm text-primary hover:underline"
           >
             ← Back to Home
           </Link>
-          <h1 className="text-2xl font-bold text-white">Moderation Interface</h1>
-          <p className="text-gray-400">
+          <h1 className="text-2xl font-bold text-foreground">Moderation Interface</h1>
+          <p className="text-muted-foreground">
             Manage reports, review content, and apply user restrictions.
           </p>
         </div>
@@ -457,23 +457,23 @@ export default function ModerationPage() {
           <div className="space-y-4">
             <h2 className="text-xl font-semibold text-white mb-2">Reports</h2>
             {reports.length === 0 ? (
-              <p className="text-center text-gray-400">No reports found.</p>
+              <p className="text-center text-muted-foreground">No reports found.</p>
             ) : (
               <div className="space-y-3">
                 {reports.map((report) => (
                   <div
                     key={report.id}
-                    className="border border-gray-700 rounded-lg p-4 bg-[#101827/80]"
+                    className="border border-border rounded-lg p-4 bg-card text-card-foreground"
                   >
                     <div className="flex items-start space-x-3">
                       {report.reporter_avatar_url ? (
                         <img
                           src={report.reporter_avatar_url}
                           alt={`${report.reporter_username}'s avatar`}
-                          className="h-10 w-10 rounded-full bg-gray-600"
+                          className="h-10 w-10 rounded-full bg-muted"
                         />
                       ) : (
-                        <div className="h-10 w-10 rounded-full bg-gray-600 flex items-center justify-center text-white">
+                        <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center text-muted-foreground">
                           {report.reporter_username
                             .split(" ")
                             .map((n) => n[0])
@@ -484,34 +484,34 @@ export default function ModerationPage() {
                       )}
                       <div className="flex-1 space-y-2">
                         <div className="flex items-center space-x-2 text-sm">
-                          <h3 className="font-semibold text-white">{report.reporter_username}</h3>
-                          <span className="text-xs text-gray-400">
+                          <h3 className="font-semibold text-foreground">{report.reporter_username}</h3>
+                          <span className="text-xs text-muted-foreground">
                             {new Date(report.created_at).toLocaleDateString()}
                           </span>
                         </div>
 
                         <div className="mt-2">
-                          <span className="font-medium text-white">Reported {report.content_type}:</span>
-                          <p className="text-gray-200 mt-1">{report.content_preview}</p>
-                          <p className="text-xs text-gray-400 mt-1">
+                          <span className="font-medium text-foreground">Reported {report.content_type}:</span>
+                          <p className="text-muted-foreground mt-1">{report.content_preview}</p>
+                          <p className="text-xs text-muted-foreground mt-1">
                             Anime: {report.anime_title}
                           </p>
                         </div>
 
                         <div className="mt-2">
-                          <span className="font-medium text-white">Reason:</span>
-                          <p className="text-gray-200 mt-1">{report.reason}</p>
+                          <span className="font-medium text-foreground">Reason:</span>
+                          <p className="text-muted-foreground mt-1">{report.reason}</p>
                         </div>
 
                         {report.explanation && (
                           <div className="mt-2">
-                            <span className="font-medium text-white">Explanation:</span>
-                            <p className="text-gray-200 mt-1">{report.explanation}</p>
+                            <span className="font-medium text-foreground">Explanation:</span>
+                            <p className="text-muted-foreground mt-1">{report.explanation}</p>
                           </div>
                         )}
 
                         <div className="mt-4 flex items-center space-x-3 text-sm">
-                          <span className="text-xs text-gray-400">
+                          <span className="text-xs text-muted-foreground">
                             Status: {report.status}
                           </span>
                           {isModeratorOrAdmin && (
@@ -523,7 +523,6 @@ export default function ModerationPage() {
                                   const notes = prompt("Enter resolution notes (optional):");
                                   handleResolveReport(report.id, notes || "");
                                 }}
-                                className="hover:bg-gray-700"
                               >
                                 Resolve
                               </Button>
@@ -534,7 +533,7 @@ export default function ModerationPage() {
                                   const notes = prompt("Enter dismissal notes (optional):");
                                   handleDismissReport(report.id, notes || "");
                                 }}
-                                className="hover:text-[#F05BBD]"
+                                className="hover:text-destructive"
                               >
                                 Dismiss
                               </Button>
@@ -551,25 +550,25 @@ export default function ModerationPage() {
 
           {/* User Restrictions Column */}
           <div className="space-y-4">
-            <h2 className="text-xl font-semibold text-white mb-2">User Restrictions</h2>
+            <h2 className="text-xl font-semibold text-foreground mb-2">User Restrictions</h2>
             {userRestrictions.length === 0 ? (
-              <p className="text-center text-gray-400">No active restrictions.</p>
+              <p className="text-center text-muted-foreground">No active restrictions.</p>
             ) : (
               <div className="space-y-3">
                 {userRestrictions.map((restriction) => (
                   <div
                     key={restriction.id}
-                    className="border border-gray-700 rounded-lg p-4 bg-[#101827/80]"
+                    className="border border-border rounded-lg p-4 bg-card text-card-foreground"
                   >
                     <div className="flex items-start space-x-3">
                       {restriction.avatar_url ? (
                         <img
                           src={restriction.avatar_url}
                           alt={`${restriction.username}'s avatar`}
-                          className="h-10 w-10 rounded-full bg-gray-600"
+                          className="h-10 w-10 rounded-full bg-muted"
                         />
                       ) : (
-                        <div className="h-10 w-10 rounded-full bg-gray-600 flex items-center justify-center text-white">
+                        <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center text-muted-foreground">
                           {restriction.username
                             .split(" ")
                             .map((n) => n[0])
@@ -580,21 +579,21 @@ export default function ModerationPage() {
                       )}
                       <div className="flex-1 space-y-2">
                         <div className="flex items-center space-x-2 text-sm">
-                          <h3 className="font-semibold text-white">{restriction.username}</h3>
-                          <span className="text-xs text-gray-400">
+                          <h3 className="font-semibold text-foreground">{restriction.username}</h3>
+                          <span className="text-xs text-muted-foreground">
                             {new Date(restriction.created_at).toLocaleDateString()}
                           </span>
                         </div>
 
                         <div className="mt-2">
-                          <span className="font-medium text-white">Reason:</span>
-                          <p className="text-gray-200 mt-1">{restriction.reason}</p>
+                          <span className="font-medium text-foreground">Reason:</span>
+                          <p className="text-muted-foreground mt-1">{restriction.reason}</p>
                         </div>
 
                         {restriction.restricted_until && (
                           <div className="mt-2">
-                            <span className="font-medium text-white">Restricted Until:</span>
-                            <p className="text-gray-200 mt-1">
+                            <span className="font-medium text-foreground">Restricted Until:</span>
+                            <p className="text-muted-foreground mt-1">
                               {new Date(restriction.restricted_until).toLocaleDateString()}
                             </p>
                           </div>
@@ -602,8 +601,8 @@ export default function ModerationPage() {
 
                         {!restriction.restricted_until && (
                           <div className="mt-2">
-                            <span className="font-medium text-white">Restricted Until:</span>
-                            <p className="text-gray-200 mt-1">Indefinite</p>
+                            <span className="font-medium text-foreground">Restricted Until:</span>
+                            <p className="text-muted-foreground mt-1">Indefinite</p>
                           </div>
                         )}
 
@@ -613,7 +612,6 @@ export default function ModerationPage() {
                               variant="destructive"
                               size="sm"
                               onClick={() => handleRemoveRestriction(restriction.id)}
-                              className="hover:bg-red-700"
                             >
                               Remove Restriction
                             </Button>
@@ -628,20 +626,20 @@ export default function ModerationPage() {
 
             {/* Add Restriction Form */}
             {selectedReport && (
-              <div className="mt-6 border border-gray-700 rounded-lg p-4 bg-[#101827/80]">
-                <h2 className="text-xl font-semibold text-white mb-2">Add Restriction for User</h2>
-                <p className="text-gray-400 mb-4">
+              <div className="mt-6 border border-border rounded-lg p-4 bg-card text-card-foreground">
+                <h2 className="text-xl font-semibold text-foreground mb-2">Add Restriction for User</h2>
+                <p className="text-muted-foreground mb-4">
                   You are about to restrict the user who posted the following content:
                 </p>
-                <div className="border border-gray-600 rounded-lg p-3 mb-4">
-                  <p className="text-gray-200">
-                    <strong>Content:</strong> {selectedReport.content_preview}
+                <div className="border border-border rounded-lg p-3 mb-4">
+                  <p className="text-muted-foreground">
+                    <strong className="text-foreground">Content:</strong> {selectedReport.content_preview}
                   </p>
-                  <p className="text-gray-200">
-                    <strong>Anime:</strong> {selectedReport.anime_title}
+                  <p className="text-muted-foreground">
+                    <strong className="text-foreground">Anime:</strong> {selectedReport.anime_title}
                   </p>
-                  <p className="text-gray-200">
-                    <strong>Reported by:</strong> {selectedReport.reporter_username}
+                  <p className="text-muted-foreground">
+                    <strong className="text-foreground">Reported by:</strong> {selectedReport.reporter_username}
                   </p>
                 </div>
                 <form onSubmit={(e) => {
@@ -655,7 +653,7 @@ export default function ModerationPage() {
                       value={restrictionReason}
                       onChange={(e) => setRestrictionReason(e.target.value)}
                       placeholder="e.g., harassment, spam, repeated violations"
-                      className="w-full p-2 rounded border border-gray-600 bg-[#101827/80] text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#7047F5]"
+                      className="w-full border-input bg-background text-foreground focus:ring-ring"
                     />
                   </div>
 
@@ -666,18 +664,17 @@ export default function ModerationPage() {
                       type="date"
                       value={restrictionUntil}
                       onChange={(e) => setRestrictionUntil(e.target.value)}
-                      className="w-full p-2 rounded border border-gray-600 bg-[#101827/80] text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#7047F5]"
+                      className="w-full border-input bg-background text-foreground focus:ring-ring"
                     />
                   </div>
 
-                  {error && <p className="text-sm text-red-500">{error}</p>}
+                  {error && <p className="text-sm text-destructive">{error}</p>}
 
                   <Button
                     type="submit"
                     variant="default"
                     size="sm"
                     disabled={loading}
-                    className="hover:bg-[#7047F5]/80"
                   >
                     {loading ? "Adding..." : "Add Restriction"}
                   </Button>
@@ -686,7 +683,7 @@ export default function ModerationPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => setSelectedReport(null)}
-                    className="hover:bg-gray-700 ml-2"
+                    className="ml-2"
                   >
                     Cancel
                   </Button>

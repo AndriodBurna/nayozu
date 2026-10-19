@@ -138,17 +138,17 @@ export default function LibraryPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#080D18] text-[#F4F6FC] p-6">
+    <div className="min-h-screen bg-background text-foreground p-6">
       <div className="max-w-6xl mx-auto">
         <div className="flex flex-col items-center mb-6">
-          <h1 className="text-3xl font-bold text-white">My Library</h1>
+          <h1 className="text-3xl font-bold text-foreground">My Library</h1>
         </div>
 
         {library.length === 0 ? (
-          <div className="bg-[#101827/80] rounded-lg p-12 text-center">
-            <p className="text-gray-400">Your library is empty. Add anime to your library from the anime discovery page.</p>
+          <div className="rounded-lg border bg-card p-12 text-center text-card-foreground">
+            <p className="text-muted-foreground">Your library is empty. Add anime to your library from the anime discovery page.</p>
             <div className="mt-6">
-              <Link href="/anime" className="text-[#7047F5] hover:underline">
+              <Link href="/anime" className="text-primary hover:underline">
                 Browse Anime
               </Link>
             </div>
@@ -162,7 +162,7 @@ export default function LibraryPage() {
                 const anime = item.anime;
                 const isUpdating = updateLibraryId === entry.id;
                 return (
-                  <div key={entry.id} className="bg-[#101827/80] rounded-lg p-4">
+                  <div key={entry.id} className="rounded-lg border bg-card p-4 text-card-foreground">
                     <div className="flex flex-col items-center">
                       {/* Anime Cover */}
                       <div className="mb-4">
@@ -176,7 +176,7 @@ export default function LibraryPage() {
                       </div>
 
                       {/* Anime Title */}
-                      <h2 className="text-xl font-bold text-white mb-2">
+                      <h2 className="text-xl font-bold text-foreground mb-2">
                         <Link href={`/anime/${anime.slug || anime.id}`} className="hover:underline">
                           {anime.title}
                         </Link>
@@ -186,7 +186,7 @@ export default function LibraryPage() {
                       <div className="space-y-3 w-full">
                         {!isUpdating ? (
                           <>
-                            <div className="flex items-center justify-between text-sm text-gray-400">
+                            <div className="flex items-center justify-between text-sm text-muted-foreground">
                               <span>Status: {entry.status}</span>
                               <span>
                                 Progress: {entry.progress} / {anime.episodeCount || "?"}
@@ -205,8 +205,9 @@ export default function LibraryPage() {
                                 Edit
                               </Button>
                               <Button
+                                variant="destructive"
+                                size="sm"
                                 onClick={() => removeLibraryEntry(entry.id)}
-                                className="bg-red-500 hover:bg-red-600"
                               >
                                 Remove
                               </Button>
@@ -224,7 +225,7 @@ export default function LibraryPage() {
                                   id={`status-${entry.id}`}
                                   value={updateStatus}
                                   onChange={(e) => setUpdateStatus(e.target.value)}
-                                  className="block w-full p-2 rounded border border-gray-600 bg-[#101827/80] text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#7047F5]"
+                                  className="block w-full p-2 rounded border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                                 >
                                   <option value="planned">Planned</option>
                                   <option value="watching">Watching</option>
@@ -245,10 +246,10 @@ export default function LibraryPage() {
                                     const val = parseInt(e.target.value, 10);
                                     setUpdateProgress(isNaN(val) ? 0 : val);
                                   }}
-                                  className="w-full p-2 rounded border border-gray-600 bg-[#101827/80] text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#7047F5]"
+                                  className="w-full p-2 rounded border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                                 />
                                 {anime.episodeCount && (
-                                  <p className="text-xs text-gray-400 mt-1">
+                                  <p className="text-xs text-muted-foreground mt-1">
                                     Maximum episodes: {anime.episodeCount}
                                   </p>
                                 )}
@@ -267,7 +268,7 @@ export default function LibraryPage() {
                                 </Button>
                                 <Button
                                   type="submit"
-                                  className="bg-[#7047F5] hover:bg-[#5a37f5]"
+                                  className="bg-primary hover:bg-primary/90 text-primary-foreground"
                                 >
                                   Save Changes
                                 </Button>
