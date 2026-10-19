@@ -6,6 +6,13 @@ interface GenreLink {
   genres: GenreRef | null;
 }
 
+export interface ExternalLink {
+  site: string;
+  url: string;
+  type?: string | null;
+  language?: string | null;
+}
+
 /** A row from the `anime` table, optionally with the genre junction embedded. */
 export interface AnimeRow {
   id: string;
@@ -17,13 +24,19 @@ export interface AnimeRow {
   cover_image_url: string | null;
   banner_image_url: string | null;
   episodes: number | null;
+  chapters?: number | null;
+  volumes?: number | null;
   status: string | null;
   season: string | null;
   season_year: number | null;
   format: string | null;
+  country?: string | null;
   average_score: number | null;
   popularity: number | null;
   media_type: string;
+  external_links?: ExternalLink[] | null;
+  trailer_site?: string | null;
+  trailer_id?: string | null;
   anime_genres?: GenreLink[] | null;
   genre_filter?: unknown; // helper embed used only for filtering; dropped below
 }
@@ -39,6 +52,12 @@ export interface Anime extends Omit<AnimeRow, "anime_genres" | "genre_filter"> {
   releaseYear: number | null;
   releaseSeason: string | null;
   episodeCount: number | null;
+  chapterCount: number | null;
+  volumeCount: number | null;
+  externalLinks: ExternalLink[] | null;
+  trailerSite: string | null;
+  trailerId: string | null;
+  mediaType: "anime" | "manga";
   genres: GenreRef[];
   // Aliases the existing AnimeCarousel / AnimeCard read:
   image: string | null;
@@ -56,6 +75,8 @@ export function cleanSynopsis(text: string | null): string | null {
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
+    .replace(/&mdash;/g, "—")
+    .replace(/&hellip;/g, "…")
     .replace(/\s+/g, " ")
     .trim();
   return cleaned || null;
@@ -74,6 +95,8 @@ export function normalizeAnime(row: AnimeRow): Anime {
       ? [row.title_english]
       : [];
 
+  const mediaType = (row.media_type === "manga" ? "manga" : "anime") as "anime" | "manga";
+
   return {
     ...rest,
     synopsis: cleanSynopsis(row.synopsis),
@@ -85,7 +108,13 @@ export function normalizeAnime(row: AnimeRow): Anime {
     averageScore: row.average_score,
     releaseYear: row.season_year,
     releaseSeason: row.season,
-    episodeCount: row.episodes,
+    episodeCount: row.episodes ?? null,
+    chapterCount: row.chapters ?? null,
+    volumeCount: row.volumes ?? null,
+    externalLinks: row.external_links ?? null,
+    trailerSite: row.trailer_site ?? null,
+    trailerId: row.trailer_id ?? null,
+    mediaType,
     genres,
     image: row.cover_image_url,
     year: row.season_year,

@@ -54,7 +54,7 @@ export default function LibraryPage() {
       const animeIds = libraryData.map((entry) => entry.anime_id);
 
       // Fetch anime data for these external IDs
-      const animeData = await getAnimesByExternalIds(animeIds);
+      const animeData = await getAnimesByExternalIds(animeIds, "anime");
       // Create a map for quick lookup
       const animeMap = new Map();
       animeData.forEach((anime) => {
@@ -166,7 +166,7 @@ export default function LibraryPage() {
                     <div className="flex flex-col items-center">
                       {/* Anime Cover */}
                       <div className="mb-4">
-                        <Link href={`/anime/${anime.slug || anime.id}`} className="block">
+                        <Link href={`/${anime.media_type || "anime"}/${anime.slug || anime.id}`} className="block">
                           <img
                             src={anime.coverImage}
                             alt={anime.title}
@@ -177,7 +177,7 @@ export default function LibraryPage() {
 
                       {/* Anime Title */}
                       <h2 className="text-xl font-bold text-foreground mb-2">
-                        <Link href={`/anime/${anime.slug || anime.id}`} className="hover:underline">
+                        <Link href={`/${anime.media_type || "anime"}/${anime.slug || anime.id}`} className="hover:underline">
                           {anime.title}
                         </Link>
                       </h2>

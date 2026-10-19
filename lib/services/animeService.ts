@@ -21,14 +21,21 @@ const cleanSearch = (s: string) => s.replace(/[%,()\\*]/g, " ").trim();
 const toAnimeList = (data: unknown): Anime[] =>
   ((data ?? []) as AnimeRow[]).map(normalizeAnime);
 
+export type MediaType = "anime" | "manga";
+
 /* ------------------------------------------------------------------ */
-/* Lists for the home page                                             */
+/* Lists for the home page / carousels                                 */
 /* ------------------------------------------------------------------ */
 
-export const getPopularAnime = async (limit: number, offset = 0): Promise<Anime[]> => {
+export const getPopularAnime = async (
+  limit: number,
+  offset = 0,
+  mediaType: MediaType = "anime"
+): Promise<Anime[]> => {
   const { data, error } = await supabase
     .from("anime")
     .select(WITH_GENRES)
+    .eq("media_type", mediaType)
     .order("popularity", { ascending: false, nullsFirst: false })
     .order("id")
     .range(offset, offset + limit - 1);
@@ -36,10 +43,14 @@ export const getPopularAnime = async (limit: number, offset = 0): Promise<Anime[
   return toAnimeList(data);
 };
 
-export const getTopRatedAnime = async (limit: number): Promise<Anime[]> => {
+export const getTopRatedAnime = async (
+  limit: number,
+  mediaType: MediaType = "anime"
+): Promise<Anime[]> => {
   const { data, error } = await supabase
     .from("anime")
     .select(WITH_GENRES)
+    .eq("media_type", mediaType)
     .gt("average_score", 0) // also excludes NULL scores
     .order("average_score", { ascending: false, nullsFirst: false })
     .order("popularity", { ascending: false, nullsFirst: false })
@@ -49,10 +60,14 @@ export const getTopRatedAnime = async (limit: number): Promise<Anime[]> => {
   return toAnimeList(data);
 };
 
-export const getRecentAnime = async (limit: number): Promise<Anime[]> => {
+export const getRecentAnime = async (
+  limit: number,
+  mediaType: MediaType = "anime"
+): Promise<Anime[]> => {
   const { data, error } = await supabase
     .from("anime")
     .select(WITH_GENRES)
+    .eq("media_type", mediaType)
     .not("season_year", "is", null)
     .neq("status", "NOT_YET_RELEASED")
     .order("season_year", { ascending: false, nullsFirst: false })
@@ -67,33 +82,43 @@ export const getRecentAnime = async (limit: number): Promise<Anime[]> => {
 /* Single / multiple lookups                                           */
 /* ------------------------------------------------------------------ */
 
-export const getAnimeBySlug = async (slug: string): Promise<Anime | null> => {
-  const { data, error } = await supabase
-    .from("anime")
-    .select(WITH_GENRES)
-    .eq("slug", slug)
-    .maybeSingle(); // null (not an exception) when the slug doesn't exist
+export const getAnimeBySlug = async (
+  slug: string,
+  mediaType?: MediaType
+): Promise<Anime | null> => {
+  let query = supabase.from("anime").select(WITH_GENRES).eq("slug", slug);
+  if (mediaType) {
+    query = query.eq("media_type", mediaType);
+  }
+  const { data, error } = await query.maybeSingle(); // null (not an exception) when the slug doesn't exist
   if (error) fail("getAnimeBySlug", error);
   return data ? normalizeAnime(data as unknown as AnimeRow) : null;
 };
 
 /** `id` is the uuid primary key (it was a number in the mock data). */
-export const getAnimeById = async (id: string): Promise<Anime | null> => {
-  const { data, error } = await supabase
-    .from("anime")
-    .select(WITH_GENRES)
-    .eq("id", id)
-    .maybeSingle();
+export const getAnimeById = async (
+  id: string,
+  mediaType?: MediaType
+): Promise<Anime | null> => {
+  let query = supabase.from("anime").select(WITH_GENRES).eq("id", id);
+  if (mediaType) {
+    query = query.eq("media_type", mediaType);
+  }
+  const { data, error } = await query.maybeSingle();
   if (error) fail("getAnimeById", error);
   return data ? normalizeAnime(data as unknown as AnimeRow) : null;
 };
 
-export const getAnimesByIds = async (ids: string[]): Promise<Anime[]> => {
+export const getAnimesByIds = async (
+  ids: string[],
+  mediaType?: MediaType
+): Promise<Anime[]> => {
   if (ids.length === 0) return [];
-  const { data, error } = await supabase
-    .from("anime")
-    .select(WITH_GENRES)
-    .in("id", ids);
+  let query = supabase.from("anime").select(WITH_GENRES).in("id", ids);
+  if (mediaType) {
+    query = query.eq("media_type", mediaType);
+  }
+  const { data, error } = await query;
   if (error) fail("getAnimesByIds", error);
   return toAnimeList(data);
 };
@@ -102,12 +127,15 @@ export const getAnimesByIds = async (ids: string[]): Promise<Anime[]> => {
  * Library, ratings, reviews and comments store the AniList id as text
  * (anime.external_id), so the library page should use this one.
  */
-export const getAnimesByExternalIds = async (externalIds: Array<string | number>): Promise<Anime[]> => {
+export const getAnimesByExternalIds = async (
+  externalIds: Array<string | number>,
+  mediaType: MediaType = "anime"
+): Promise<Anime[]> => {
   if (externalIds.length === 0) return [];
   const { data, error } = await supabase
     .from("anime")
     .select(WITH_GENRES)
-    .eq("media_type", "anime")
+    .eq("media_type", mediaType)
     .in("external_id", externalIds.map(Number));
   if (error) fail("getAnimesByExternalIds", error);
   return toAnimeList(data);
@@ -129,6 +157,7 @@ export interface AnimePageParams {
   search?: string;
   genre?: string; // genre NAME, e.g. "Action"
   sort?: string; // "popularity" | "score" | "newest"
+  mediaType?: MediaType;
 }
 
 export const getAnimePage = async ({
@@ -137,6 +166,7 @@ export const getAnimePage = async ({
   search,
   genre,
   sort = "popularity",
+  mediaType = "anime",
 }: AnimePageParams): Promise<{ items: Anime[]; total: number }> => {
   const from = (Math.max(page, 1) - 1) * pageSize;
   const to = from + pageSize - 1;
@@ -148,7 +178,10 @@ export const getAnimePage = async ({
     ? "*, genre_filter:anime_genres!inner(genres!inner(name)), anime_genres(genres(name))"
     : WITH_GENRES;
 
-  let query = supabase.from("anime").select(select, { count: "exact" });
+  let query = supabase
+    .from("anime")
+    .select(select, { count: "exact" })
+    .eq("media_type", mediaType);
 
   if (genre) query = query.eq("genre_filter.genres.name", genre);
 

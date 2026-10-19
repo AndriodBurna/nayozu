@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Home, Film, Heart, Compass } from "lucide-react";
+import { Home, Film, BookOpen, Heart, Compass } from "lucide-react";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { AUTH_ENABLED } from "@/lib/features";
@@ -43,6 +43,10 @@ export default function BottomNav() {
       <Link href="/anime" className="flex flex-col items-center text-xs font-medium text-muted-foreground hover:text-foreground">
         <Film className="mb-1 h-4 w-4" />
         <span>Anime</span>
+      </Link>
+      <Link href="/manga" className="flex flex-col items-center text-xs font-medium text-muted-foreground hover:text-foreground">
+        <BookOpen className="mb-1 h-4 w-4" />
+        <span>Manga</span>
       </Link>
       {AUTH_ENABLED && user && (
         <Link href="/library" className="flex flex-col items-center text-xs font-medium text-muted-foreground hover:text-foreground">

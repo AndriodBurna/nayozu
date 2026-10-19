@@ -20,12 +20,14 @@ export default async function Home() {
       supabase
         .from("anime")
         .select(WITH_GENRES)
+        .eq("media_type", "anime")
         .order("popularity", { ascending: false, nullsFirst: false })
         .order("id")
         .range(0, 9),
       supabase
         .from("anime")
         .select(WITH_GENRES)
+        .eq("media_type", "anime")
         .not("season_year", "is", null)
         .neq("status", "NOT_YET_RELEASED")
         .order("season_year", { ascending: false, nullsFirst: false })

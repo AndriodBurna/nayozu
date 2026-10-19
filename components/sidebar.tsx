@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Home, Film, Heart, Compass } from "lucide-react";
+import { Home, Film, BookOpen, Heart, Compass } from "lucide-react";
 
 export default function Sidebar() {
   return (
@@ -18,6 +18,13 @@ export default function Sidebar() {
         >
           <Film className="h-4 w-4" />
           Anime
+        </Link>
+        <Link
+          href="/manga"
+          className="flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground rounded-lg transition-colors"
+        >
+          <BookOpen className="h-4 w-4" />
+          Manga
         </Link>
         <Link
           href="/library"

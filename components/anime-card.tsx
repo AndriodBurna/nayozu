@@ -21,8 +21,11 @@ interface AnimeCardProps {
   year: number | null;
   synopsis?: string | null;
   episodes?: number | null;
+  chapters?: number | null;
+  volumes?: number | null;
   status?: string | null;
   slug: string;
+  mediaType?: "anime" | "manga";
   libraryEntry?: LibraryEntry;
   userId?: string | null;
 }
@@ -43,8 +46,11 @@ export default function AnimeCard({
   year,
   synopsis,
   episodes,
+  chapters,
+  volumes,
   status,
   slug,
+  mediaType = "anime",
   libraryEntry,
   userId,
 }: AnimeCardProps) {
@@ -61,9 +67,15 @@ export default function AnimeCard({
   // Follow the server/parent if it sends a different entry later.
   useEffect(() => setEntry(libraryEntry), [libraryEntry]);
 
+  const chapterOrVolume = chapters
+    ? `${chapters} ch`
+    : volumes
+    ? `${volumes} vol`
+    : null;
+
   const meta = [
     year,
-    episodes ? `${episodes} eps` : null,
+    mediaType === "manga" ? chapterOrVolume : (episodes ? `${episodes} eps` : null),
     status ? pretty(status) : null,
   ]
     .filter(Boolean)
@@ -143,7 +155,7 @@ export default function AnimeCard({
   return (
     <article className="anime-card">
       {/* Poster (link) */}
-      <Link href={`/anime/${slug}`} className="anime-card-poster block" aria-label={title}>
+      <Link href={`/${mediaType}/${slug}`} className="anime-card-poster block" aria-label={title}>
         {image && !imgFailed ? (
           <Image
             src={image}
@@ -163,7 +175,7 @@ export default function AnimeCard({
       <div className="anime-card-body">
         <div className="anime-card-head">
           <h3 className="anime-card-title">
-            <Link href={`/anime/${slug}`} className="hover:underline">
+            <Link href={`/${mediaType}/${slug}`} className="hover:underline">
               {title}
             </Link>
           </h3>
@@ -233,7 +245,7 @@ export default function AnimeCard({
           ) : (
             <div className="space-y-2">
               <p className="text-xs capitalize text-muted-foreground">
-                {pretty(entry.status)} · ep {entry.progress}
+                {pretty(entry.status)} · {mediaType === "manga" ? "ch" : "ep"} {entry.progress}
               </p>
               <div className="flex gap-2">
                 <Button
