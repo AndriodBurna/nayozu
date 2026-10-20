@@ -24,7 +24,6 @@ export default async function Home() {
 
   try {
     const [popularAnimeRes, popularMangaRes, latestRes] = await Promise.all([
-      // Trending Anime
       supabase
         .from("anime")
         .select(WITH_GENRES)
@@ -32,7 +31,6 @@ export default async function Home() {
         .order("popularity", { ascending: false, nullsFirst: false })
         .order("id")
         .limit(6),
-      // Popular Manga
       supabase
         .from("anime")
         .select(WITH_GENRES)
@@ -40,7 +38,6 @@ export default async function Home() {
         .order("popularity", { ascending: false, nullsFirst: false })
         .order("id")
         .limit(6),
-      // Latest Releases / Episodes
       supabase
         .from("anime")
         .select(WITH_GENRES)
@@ -56,7 +53,6 @@ export default async function Home() {
       return <Empty />;
     }
 
-    // Selected hero anime: uses first trending anime item or fallback
     const hero = trendingAnime[0] || {
       title: "Demon Slayer: Kimetsu no Yaiba",
       synopsis:
@@ -85,9 +81,11 @@ export default async function Home() {
 
           {/* Hero Content */}
           <div className="relative z-10 max-w-xl space-y-4">
-            <span className="inline-block rounded-md bg-[#6d44f6] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-white">
+            {/* Dynamic Accent: Trending Tag */}
+            <span className="inline-block rounded-md bg-primary px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-primary-foreground shadow-sm shadow-primary/30 transition-colors">
               Trending
             </span>
+
             <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight text-white leading-tight">
               {hero.title}
             </h1>
@@ -97,33 +95,34 @@ export default async function Home() {
             </p>
 
             <div className="flex flex-wrap gap-2 pt-1">
-  {hero.genres?.slice(0, 3).map((g: any, index: number) => {
-    const genreName = typeof g === "string" ? g : g?.name ?? "";
-    if (!genreName) return null;
-    return (
-      <span
-        key={`${genreName}-${index}`}
-        className="rounded-full border border-white/10 bg-black/40 px-3 py-1 text-xs text-zinc-300 backdrop-blur-md"
-      >
-        {genreName}
-      </span>
-    );
-  })}
-</div>
+              {hero.genres?.slice(0, 3).map((g: any, index: number) => {
+                const genreName = typeof g === "string" ? g : g?.name ?? "";
+                if (!genreName) return null;
+                return (
+                  <span
+                    key={`${genreName}-${index}`}
+                    className="rounded-full border border-white/10 bg-black/40 px-3 py-1 text-xs text-zinc-300 backdrop-blur-md"
+                  >
+                    {genreName}
+                  </span>
+                );
+              })}
+            </div>
 
             <div className="flex flex-wrap items-center gap-3 pt-3">
+              {/* Dynamic Accent: Watch Now Button */}
               <Button
                 asChild
-                className="h-11 rounded-xl bg-[#6d44f6] px-6 font-semibold text-white shadow-lg shadow-[#6d44f6]/30 hover:bg-[#5b32e6]"
+                className="h-11 rounded-xl bg-primary px-6 font-semibold text-primary-foreground shadow-lg shadow-primary/30 hover:brightness-110 transition-all"
               >
                 <Link href={`/anime/${hero.slug}`}>
-                  <Play className="mr-2 h-4 w-4 fill-white" /> Watch Now
+                  <Play className="mr-2 h-4 w-4 fill-current" /> Watch Now
                 </Link>
               </Button>
               <Button
                 asChild
                 variant="outline"
-                className="h-11 rounded-xl border-white/20 bg-white/5 px-5 font-semibold text-white backdrop-blur-md hover:bg-white/10"
+                className="h-11 rounded-xl border-white/20 bg-white/5 px-5 font-semibold text-white backdrop-blur-md hover:border-primary hover:text-primary transition-colors"
               >
                 <Link href={`/anime/${hero.slug}`}>
                   <Plus className="mr-2 h-4 w-4" /> Add to Watchlist
@@ -134,10 +133,16 @@ export default async function Home() {
 
           {/* Slider Controls */}
           <div className="absolute bottom-6 right-6 z-10 hidden md:flex items-center gap-2">
-            <button className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/50 text-white backdrop-blur-md hover:bg-white/20 transition-colors">
+            <button
+              type="button"
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/50 text-white backdrop-blur-md hover:border-primary hover:text-primary transition-colors"
+            >
               <ChevronLeft className="h-4 w-4" />
             </button>
-            <button className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/50 text-white backdrop-blur-md hover:bg-white/20 transition-colors">
+            <button
+              type="button"
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/50 text-white backdrop-blur-md hover:border-primary hover:text-primary transition-colors"
+            >
               <ChevronRight className="h-4 w-4" />
             </button>
           </div>
@@ -147,12 +152,13 @@ export default async function Home() {
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Flame className="h-5 w-5 text-orange-500" />
+              {/* Dynamic Accent: Flame Icon */}
+              <Flame className="h-5 w-5 text-primary transition-colors" />
               <h2 className="text-xl font-bold text-white">Trending Anime</h2>
             </div>
             <Link
               href="/anime?filter=trending"
-              className="flex items-center text-xs font-semibold text-zinc-400 hover:text-white transition-colors"
+              className="flex items-center text-xs font-semibold text-zinc-400 hover:text-primary transition-colors"
             >
               See All <ChevronRight className="h-4 w-4 ml-0.5" />
             </Link>
@@ -176,16 +182,17 @@ export default async function Home() {
 
         {/* 3. POPULAR MANGA & LATEST RELEASES */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          {/* Popular Manga (Left - 7 cols) */}
+          {/* Popular Manga */}
           <section className="space-y-4 lg:col-span-7">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <BookOpen className="h-5 w-5 text-[#6d44f6]" />
+                {/* Dynamic Accent: Book Icon */}
+                <BookOpen className="h-5 w-5 text-primary transition-colors" />
                 <h2 className="text-xl font-bold text-white">Popular Manga</h2>
               </div>
               <Link
                 href="/manga"
-                className="flex items-center text-xs font-semibold text-zinc-400 hover:text-white"
+                className="flex items-center text-xs font-semibold text-zinc-400 hover:text-primary transition-colors"
               >
                 See All <ChevronRight className="h-4 w-4 ml-0.5" />
               </Link>
@@ -206,16 +213,17 @@ export default async function Home() {
             </div>
           </section>
 
-          {/* Latest Releases (Right - 5 cols) */}
+          {/* Latest Releases */}
           <section className="space-y-4 lg:col-span-5">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Clock className="h-5 w-5 text-sky-400" />
+                {/* Dynamic Accent: Clock Icon */}
+                <Clock className="h-5 w-5 text-primary transition-colors" />
                 <h2 className="text-xl font-bold text-white">Latest Releases</h2>
               </div>
               <Link
                 href="/anime?sort=latest"
-                className="flex items-center text-xs font-semibold text-zinc-400 hover:text-white"
+                className="flex items-center text-xs font-semibold text-zinc-400 hover:text-primary transition-colors"
               >
                 See All <ChevronRight className="h-4 w-4 ml-0.5" />
               </Link>
@@ -226,7 +234,7 @@ export default async function Home() {
                 <Link
                   key={rel.id || idx}
                   href={`/anime/${rel.slug}`}
-                  className="flex items-center gap-3 rounded-xl border border-[#1a2034] bg-[#121625] p-2 hover:bg-[#181d30] transition-colors"
+                  className="group flex items-center gap-3 rounded-xl border border-[#1a2034] bg-[#121625] p-2 hover:border-primary/50 hover:bg-[#181d30] transition-colors"
                 >
                   <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-zinc-800">
                     {rel.image && (
@@ -239,7 +247,7 @@ export default async function Home() {
                     )}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h4 className="truncate text-sm font-semibold text-white">
+                    <h4 className="truncate text-sm font-semibold text-white group-hover:text-primary transition-colors">
                       {rel.title}
                     </h4>
                     <p className="text-xs text-zinc-400">
@@ -252,7 +260,7 @@ export default async function Home() {
           </section>
         </div>
 
-        {/* 4. JOIN COMMUNITY BANNER */}
+        {/* 4. BOTTOM COMMUNITY BANNER */}
         <section className="relative overflow-hidden rounded-2xl border border-[#20273d] bg-gradient-to-r from-[#171a2b] via-[#211b36] to-[#121526] p-6 flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="space-y-1 text-center md:text-left">
             <h3 className="text-lg font-bold text-white">Join the Community</h3>
@@ -262,7 +270,7 @@ export default async function Home() {
           </div>
           <Button
             asChild
-            className="rounded-xl bg-[#6d44f6] px-6 text-sm font-semibold text-white hover:bg-[#5b32e6] shadow-lg shadow-[#6d44f6]/30"
+            className="rounded-xl bg-primary px-6 text-sm font-semibold text-primary-foreground hover:brightness-110 shadow-lg shadow-primary/30 transition-all"
           >
             <Link href="/auth/sign-up">Create Account</Link>
           </Button>

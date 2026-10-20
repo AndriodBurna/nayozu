@@ -24,40 +24,40 @@ export default function RightPanel() {
 
   return (
     <>
-      {/* Mobile Dim Overlay */}
+      {/* Backdrop overlay when open */}
       {rightOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden"
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
           onClick={closeRight}
           aria-hidden="true"
         />
       )}
 
-      {/* Side Panel: Permanent on lg/desktop, slide-in drawer on mobile */}
+      {/* Slide-out Panel: Hidden off-screen by default, slides out when rightOpen is true */}
       <aside
         aria-label="Side panel"
-        className={`fixed inset-y-0 right-0 z-50 w-80 max-w-[90vw] overflow-y-auto border-l border-[#1a1f30] bg-[#0b0e17] p-4 transition-transform duration-300 ease-in-out lg:sticky lg:top-16 lg:z-0 lg:h-[calc(100vh-4rem)] lg:max-w-none lg:shrink-0 lg:self-start lg:translate-x-0 ${
-          rightOpen ? "translate-x-0" : "translate-x-full lg:translate-x-0"
+        className={`fixed inset-y-0 right-0 z-50 w-80 max-w-[90vw] overflow-y-auto border-l border-[#1a1f30] bg-[#0b0e17] p-5 transition-transform duration-300 ease-in-out ${
+          rightOpen ? "translate-x-0" : "translate-x-full"
         } flex flex-col gap-5`}
       >
-        {/* Mobile Close Bar */}
-        <div className="flex items-center justify-between lg:hidden">
-          <span className="font-semibold text-white">Community & Profile</span>
+        {/* Header with Close Button */}
+        <div className="flex items-center justify-between pb-1 border-b border-white/5">
+          <span className="font-semibold text-white text-sm">Community & Activity</span>
           <Button
             variant="ghost"
             size="icon"
             onClick={closeRight}
             aria-label="Close side panel"
-            className="text-zinc-400 hover:text-white"
+            className="text-zinc-400 hover:text-white h-8 w-8"
           >
-            <X className="h-5 w-5" />
+            <X className="h-4 w-4" />
           </Button>
         </div>
 
-        {/* 1. User Profile & Level Widget */}
+        {/* User Status / Profile Card */}
         <div className="rounded-2xl border border-[#1c2236] bg-[#121624] p-4">
           <div className="flex items-center gap-3">
-            <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-full border border-purple-500/40">
+            <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-full border border-primary/40">
               <Image
                 src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80"
                 alt="Avatar"
@@ -72,7 +72,7 @@ export default function RightPanel() {
                 <span>2.4k XP</span>
               </div>
               <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
-                <div className="h-full w-3/4 rounded-full bg-gradient-to-r from-blue-500 to-[#7c4dff]" />
+                <div className="h-full w-3/4 rounded-full bg-primary" />
               </div>
             </div>
           </div>
@@ -91,7 +91,7 @@ export default function RightPanel() {
           </Button>
         </div>
 
-        {/* 2. Friends Online */}
+        {/* Friends Online */}
         <div className="space-y-3">
           <div className="flex items-center justify-between text-xs">
             <div className="flex items-center gap-1.5 font-semibold text-zinc-200">
@@ -140,11 +140,11 @@ export default function RightPanel() {
           </div>
         </div>
 
-        {/* 3. Watch Together Widget */}
+        {/* Watch Together Widget */}
         <div className="space-y-3">
           <div className="flex items-center justify-between text-xs">
             <div className="flex items-center gap-1.5 font-semibold text-zinc-200">
-              <Tv className="h-3.5 w-3.5 text-[#7c4dff]" />
+              <Tv className="h-3.5 w-3.5 text-primary" />
               <span>Watch Together</span>
             </div>
             <Link href="/watch-together" className="text-zinc-400 hover:text-white flex items-center">
@@ -169,14 +169,14 @@ export default function RightPanel() {
             </div>
             <Button
               size="sm"
-              className="h-7 rounded-lg bg-[#6d44f6] px-3 text-xs font-semibold text-white hover:bg-[#5b32e6]"
+              className="h-7 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground hover:brightness-110"
             >
               Join
             </Button>
           </div>
         </div>
 
-        {/* 4. Trending in Community */}
+        {/* Trending in Community */}
         <div className="space-y-3">
           <div className="flex items-center justify-between text-xs">
             <div className="flex items-center gap-1.5 font-semibold text-zinc-200">

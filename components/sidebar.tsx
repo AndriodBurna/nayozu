@@ -56,7 +56,7 @@ export default function Sidebar() {
                 className={cn(
                   "flex items-center gap-3.5 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all duration-150",
                   active
-                    ? "bg-[#6d44f6] text-white shadow-lg shadow-[#6d44f6]/30 font-semibold"
+                    ? "bg-primary text-primary-foreground shadow-lg shadow-primary/30 font-semibold"
                     : "text-zinc-400 hover:text-white hover:bg-[#141928]"
                 )}
               >
@@ -67,7 +67,7 @@ export default function Sidebar() {
           })}
         </nav>
 
-        {/* My Library Section */}
+        {/* My Library */}
         <div>
           <p className="px-3 text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">
             My Library
@@ -83,7 +83,7 @@ export default function Sidebar() {
                   className={cn(
                     "flex items-center gap-3.5 px-3.5 py-2 rounded-xl text-sm font-medium transition-all duration-150",
                     active
-                      ? "bg-[#6d44f6] text-white font-semibold"
+                      ? "bg-primary text-primary-foreground font-semibold"
                       : "text-zinc-400 hover:text-white hover:bg-[#141928]"
                   )}
                 >
@@ -107,8 +107,8 @@ export default function Sidebar() {
         </div>
       </div>
 
-      {/* Sidebar Footer Artwork Card */}
-      <div className="relative mt-6 overflow-hidden rounded-2xl border border-white/5 bg-gradient-to-t from-black/80 via-purple-950/40 to-transparent p-4">
+      {/* Sidebar Artwork Card */}
+      <div className="relative mt-6 overflow-hidden rounded-2xl border border-white/5 bg-gradient-to-t from-black/80 via-primary/10 to-transparent p-4">
         <div
           className="absolute inset-0 -z-10 bg-cover bg-center opacity-30"
           style={{

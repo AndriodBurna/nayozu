@@ -52,6 +52,49 @@
     --ring: 254 90% 70%;
     --radius: 0.75rem;
   }
+
+  /* ---- DYNAMIC ACCENT COLOR PRESETS (Triggered via data-accent) ---- */
+  html[data-accent="emerald"] {
+    --primary: 158 64% 52%;
+    --primary-foreground: 160 84% 5%;
+    --ring: 158 64% 52%;
+  }
+
+  html[data-accent="blue"] {
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 217 91% 60%;
+  }
+
+  html[data-accent="purple"] {
+    --primary: 254 90% 62%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 254 90% 70%;
+  }
+
+  html[data-accent="pink"] {
+    --primary: 330 81% 60%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 330 81% 60%;
+  }
+
+  html[data-accent="amber"] {
+    --primary: 38 92% 50%;
+    --primary-foreground: 48 96% 6%;
+    --ring: 38 92% 50%;
+  }
+
+  html[data-accent="red"] {
+    --primary: 0 84% 60%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 0 84% 60%;
+  }
+
+  html[data-accent="white"] {
+    --primary: 0 0% 98%;
+    --primary-foreground: 223 50% 7%;
+    --ring: 0 0% 98%;
+  }
 }
 
 /* ------------------------------------------------------------------ */
