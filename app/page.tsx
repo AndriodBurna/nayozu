@@ -73,8 +73,7 @@ export default async function Home() {
             Welcome to <span className="text-gradient">NAYOZU</span>
           </h1>
           <p>
-            Discover, watch, and discuss your favorite anime with a passionate
-            community.
+            Discover, track and discuss your favorite anime and manga with a passionate community.
           </p>
           <div className="hero-actions">
             <Button asChild size="lg">

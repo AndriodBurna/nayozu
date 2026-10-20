@@ -32,13 +32,12 @@ export default function Header() {
   const [loading, setLoading] = useState(AUTH_ENABLED);
 
   const handleSearchSubmit = (query: string) => {
-    const params = new URLSearchParams(searchParams.toString());
-    if (query.trim()) {
-      params.set("search", query.trim());
+    const trimmed = query.trim();
+    if (trimmed) {
+      router.push(`/search?q=${encodeURIComponent(trimmed)}`);
     } else {
-      params.delete("search");
+      router.push("/search");
     }
-    router.push(`/anime?${params.toString()}`);
   };
 
   useEffect(() => {
@@ -121,7 +120,7 @@ export default function Header() {
       </div>
 
       <div className="hidden md:flex items-center space-x-4">
-        <SearchBar onSubmit={handleSearchSubmit} />
+        <SearchBar onSubmit={handleSearchSubmit} placeholder="Search anime and manga..." />
         <ThemeSwitcher />
       </div>
 

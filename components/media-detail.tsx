@@ -7,6 +7,7 @@ import AnimeCarousel from "@/components/anime-carousel";
 import CommentList from "@/components/comment-list";
 import ErrorState from "@/components/error";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { AUTH_ENABLED } from "@/lib/features";
 import { normalizeAnime, type AnimeRow } from "@/lib/services/normalizeAnime";
 import { createClient } from "@/lib/supabase/server";
@@ -116,6 +117,41 @@ export default async function MediaDetail({ slug, mediaType = "anime" }: MediaDe
         .filter(Boolean)
         .join(" · ");
 
+  // Classify external links into streaming/reading platforms vs general info/social
+  const isStreamingLink = (l: { site?: string; type?: string | null }) => {
+    const site = (l.site || "").toLowerCase();
+    const type = (l.type || "").toUpperCase();
+    if (type === "STREAMING") return true;
+    if (
+      [
+        "crunchyroll",
+        "funimation",
+        "hulu",
+        "netflix",
+        "hidive",
+        "vrv",
+        "bilibili",
+        "iqiyi",
+        "young animal",
+        "manga park",
+        "piccoma",
+        "viz",
+        "shonen jump",
+        "manga plus",
+        "lezhin",
+        "naver series",
+      ].some((k) => site.includes(k))
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  const streamingLinks = (item.externalLinks || []).filter(isStreamingLink);
+  const otherLinks = (item.externalLinks || []).filter((l) => !streamingLinks.includes(l));
+  const hasTrailer =
+    item.trailerSite?.toLowerCase() === "youtube" && Boolean(item.trailerId);
+
   return (
     <div className="flex flex-col gap-10">
       <div>
@@ -195,26 +231,46 @@ export default async function MediaDetail({ slug, mediaType = "anime" }: MediaDe
               ))}
           </dl>
 
-          {/* External links & Trailer */}
-          {(item.trailerId || (item.externalLinks && item.externalLinks.length > 0)) && (
+          {/* Grouped "Where to watch / Where to read" links for titles that have no official embed */}
+          {!item.officialVideoId && streamingLinks.length > 0 && (
             <div className="space-y-2 pt-2">
-              <h3 className="text-sm font-semibold text-foreground">Links & Media</h3>
+              <h3 className="text-sm font-semibold text-foreground">
+                {isManga ? "Where to Read" : "Where to Watch"}
+              </h3>
               <div className="flex flex-wrap gap-2">
-                {item.trailerId && (
+                {streamingLinks.map((link, idx) => (
                   <a
-                    href={
-                      item.trailerSite?.toLowerCase() === "youtube"
-                        ? `https://www.youtube.com/watch?v=${item.trailerId}`
-                        : `https://www.dailymotion.com/video/${item.trailerId}`
-                    }
+                    key={`${link.site}-${idx}`}
+                    href={link.url}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-2.5 py-1 text-xs font-medium text-foreground hover:bg-accent transition-colors"
                   >
-                    ▶ Watch Trailer ({item.trailerSite || "Video"})
+                    {link.site}
                   </a>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Trailer Button (Link-out only, never embedded) and Official/Community links */}
+          {(hasTrailer || otherLinks.length > 0) && (
+            <div className="space-y-2 pt-2">
+              <h3 className="text-sm font-semibold text-foreground">Links & Media</h3>
+              <div className="flex flex-wrap items-center gap-2">
+                {hasTrailer && (
+                  <Button asChild variant="outline" size="sm">
+                    <a
+                      href={`https://www.youtube.com/watch?v=${encodeURIComponent(item.trailerId!)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5"
+                    >
+                      ▶ Watch Trailer
+                    </a>
+                  </Button>
                 )}
-                {item.externalLinks?.map((link, idx) => (
+                {otherLinks.map((link, idx) => (
                   <a
                     key={`${link.site}-${idx}`}
                     href={link.url}
@@ -230,6 +286,32 @@ export default async function MediaDetail({ slug, mediaType = "anime" }: MediaDe
           )}
         </div>
       </div>
+
+      {/* Official In-Site Player (rendered only when official_video_id is not null) */}
+      {item.officialVideoId && (
+        <section className="space-y-3">
+          <h2 className="text-xl font-bold">Watch on NAYOZU</h2>
+          <div className="relative aspect-video w-full max-w-4xl overflow-hidden rounded-xl border bg-black shadow-lg">
+            <iframe
+              src={
+                item.officialVideoKind === "playlist"
+                  ? `https://www.youtube-nocookie.com/embed/videoseries?list=${encodeURIComponent(item.officialVideoId)}`
+                  : `https://www.youtube-nocookie.com/embed/${encodeURIComponent(item.officialVideoId)}`
+              }
+              title={`${item.title} - Official Video`}
+              loading="lazy"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              allowFullScreen
+              className="absolute inset-0 h-full w-full border-0"
+            />
+          </div>
+          {item.officialVideoCredit && (
+            <p className="text-xs text-muted-foreground">
+              Official upload by {item.officialVideoCredit}
+            </p>
+          )}
+        </section>
+      )}
 
       {/* Comments */}
       {AUTH_ENABLED && (

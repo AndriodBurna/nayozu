@@ -54,7 +54,7 @@ export default function BottomNav() {
           <span>Library</span>
         </Link>
       )}
-      <Link href="/anime?sort=popularity" className="flex flex-col items-center text-xs font-medium text-muted-foreground hover:text-foreground">
+      <Link href="/discover" className="flex flex-col items-center text-xs font-medium text-muted-foreground hover:text-foreground">
         <Compass className="mb-1 h-4 w-4" />
         <span>Discover</span>
       </Link>

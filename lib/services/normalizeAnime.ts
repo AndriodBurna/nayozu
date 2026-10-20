@@ -37,6 +37,9 @@ export interface AnimeRow {
   external_links?: ExternalLink[] | null;
   trailer_site?: string | null;
   trailer_id?: string | null;
+  official_video_kind?: "video" | "playlist" | null;
+  official_video_id?: string | null;
+  official_video_credit?: string | null;
   anime_genres?: GenreLink[] | null;
   genre_filter?: unknown; // helper embed used only for filtering; dropped below
 }
@@ -57,6 +60,9 @@ export interface Anime extends Omit<AnimeRow, "anime_genres" | "genre_filter"> {
   externalLinks: ExternalLink[] | null;
   trailerSite: string | null;
   trailerId: string | null;
+  officialVideoKind: "video" | "playlist" | null;
+  officialVideoId: string | null;
+  officialVideoCredit: string | null;
   mediaType: "anime" | "manga";
   genres: GenreRef[];
   // Aliases the existing AnimeCarousel / AnimeCard read:
@@ -114,6 +120,9 @@ export function normalizeAnime(row: AnimeRow): Anime {
     externalLinks: row.external_links ?? null,
     trailerSite: row.trailer_site ?? null,
     trailerId: row.trailer_id ?? null,
+    officialVideoKind: (row.official_video_kind as "video" | "playlist") ?? null,
+    officialVideoId: row.official_video_id ?? null,
+    officialVideoCredit: row.official_video_credit ?? null,
     mediaType,
     genres,
     image: row.cover_image_url,

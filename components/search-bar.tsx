@@ -4,9 +4,13 @@ import { useState } from "react";
 
 interface SearchBarProps {
   onSubmit: (query: string) => void;
+  placeholder?: string;
 }
 
-export default function SearchBar({ onSubmit }: SearchBarProps) {
+export default function SearchBar({
+  onSubmit,
+  placeholder = "Search anime and manga...",
+}: SearchBarProps) {
   const [query, setQuery] = useState("");
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -18,7 +22,7 @@ export default function SearchBar({ onSubmit }: SearchBarProps) {
     <form onSubmit={handleSubmit} className="relative w-64">
       <input
         type="text"
-        placeholder="Search anime..."
+        placeholder={placeholder}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         className="w-full rounded-lg bg-[#101827/80] border border-white/20 px-4 py-2 text-sm text-[#F4F6FC] placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#7047F5] focus:border-transparent"

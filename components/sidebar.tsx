@@ -34,7 +34,7 @@ export default function Sidebar() {
           Library
         </Link>
         <Link
-          href="/anime?sort=popularity"
+          href="/discover"
           className="flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground rounded-lg transition-colors"
         >
           <Compass className="h-4 w-4" />
