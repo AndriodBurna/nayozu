@@ -6,12 +6,20 @@ import { notFound } from "next/navigation";
 import AnimeCarousel from "@/components/anime-carousel";
 import CommentList from "@/components/comment-list";
 import ErrorState from "@/components/error";
+import MediaPlayer from "@/components/media-player";
+import MangaReader from "@/components/manga-reader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AUTH_ENABLED } from "@/lib/features";
 import { normalizeAnime, type AnimeRow } from "@/lib/services/normalizeAnime";
 import { createClient } from "@/lib/supabase/server";
 import type { MediaType } from "@/lib/services/animeService";
+import {
+  classifyExternalLink,
+  deduplicateLinksBySite,
+  resolveAnimeEpisodes,
+  resolveMangaChapters,
+} from "@/lib/providers/mediaProviderAdapter";
 
 const WITH_GENRES = "*, anime_genres(genres(name))";
 
@@ -68,15 +76,58 @@ export default async function MediaDetail({ slug, mediaType = "anime" }: MediaDe
 
   // "More to explore": most popular titles other than this one
   const supabase = await createClient();
-  const { data: moreData } = await supabase
-    .from("anime")
-    .select(WITH_GENRES)
-    .eq("media_type", mediaType)
-    .neq("id", item.id)
-    .order("popularity", { ascending: false, nullsFirst: false })
-    .order("id")
-    .limit(6);
-  const more = ((moreData ?? []) as unknown as AnimeRow[]).map(normalizeAnime);
+  const [moreRes, userRes] = await Promise.all([
+    supabase
+      .from("anime")
+      .select(WITH_GENRES)
+      .eq("media_type", mediaType)
+      .neq("id", item.id)
+      .order("popularity", { ascending: false, nullsFirst: false })
+      .order("id")
+      .limit(6),
+    AUTH_ENABLED
+      ? supabase.auth.getUser()
+      : Promise.resolve({ data: { user: null } }),
+  ]);
+
+  const more = (((moreRes.data ?? []) as unknown as AnimeRow[])).map(normalizeAnime);
+
+  const user = userRes.data.user;
+  const userId = user?.id ?? null;
+  let userProgress = 0;
+  if (user) {
+    const { data: libRow } = await supabase
+      .from("user_anime_library")
+      .select("progress")
+      .eq("user_id", user.id)
+      .eq("anime_id", String(item.external_id))
+      .maybeSingle();
+    if (libRow && typeof libRow.progress === "number") {
+      userProgress = libRow.progress;
+    }
+  }
+
+  // Resolve in-site playback episodes or manga reading chapters
+  const videoEpisodes = !isManga
+    ? resolveAnimeEpisodes({
+        id: item.id,
+        title: item.title,
+        officialVideoId: item.officialVideoId,
+        officialVideoKind: item.officialVideoKind,
+        officialVideoCredit: item.officialVideoCredit,
+        episodeCount: item.episodeCount,
+        coverImage: item.coverImage,
+      })
+    : [];
+
+  const mangaChapters = isManga
+    ? resolveMangaChapters({
+        id: item.id,
+        title: item.title,
+        chapterCount: item.chapterCount,
+        externalLinks: item.externalLinks,
+      })
+    : [];
 
   const facts: Array<[string, string | number | null | undefined]> = isManga
     ? [
@@ -117,38 +168,23 @@ export default async function MediaDetail({ slug, mediaType = "anime" }: MediaDe
         .filter(Boolean)
         .join(" · ");
 
-  // Classify external links into streaming/reading platforms vs general info/social
-  const isStreamingLink = (l: { site?: string; type?: string | null }) => {
-    const site = (l.site || "").toLowerCase();
-    const type = (l.type || "").toUpperCase();
-    if (type === "STREAMING") return true;
-    if (
-      [
-        "crunchyroll",
-        "funimation",
-        "hulu",
-        "netflix",
-        "hidive",
-        "vrv",
-        "bilibili",
-        "iqiyi",
-        "young animal",
-        "manga park",
-        "piccoma",
-        "viz",
-        "shonen jump",
-        "manga plus",
-        "lezhin",
-        "naver series",
-      ].some((k) => site.includes(k))
-    ) {
-      return true;
-    }
-    return false;
-  };
+  // Classify and de-duplicate external links (one entry per site, prefer English or no-language)
+  const rawLinks = item.externalLinks || [];
+  const rawStreaming: typeof rawLinks = [];
+  const rawInfo: typeof rawLinks = [];
+  const rawSocial: typeof rawLinks = [];
 
-  const streamingLinks = (item.externalLinks || []).filter(isStreamingLink);
-  const otherLinks = (item.externalLinks || []).filter((l) => !streamingLinks.includes(l));
+  for (const l of rawLinks) {
+    const cat = classifyExternalLink(l);
+    if (cat === "streaming") rawStreaming.push(l);
+    else if (cat === "social") rawSocial.push(l);
+    else rawInfo.push(l);
+  }
+
+  const streamingLinks = deduplicateLinksBySite(rawStreaming);
+  const infoLinks = deduplicateLinksBySite(rawInfo);
+  const socialLinks = deduplicateLinksBySite(rawSocial);
+
   const hasTrailer =
     item.trailerSite?.toLowerCase() === "youtube" && Boolean(item.trailerId);
 
@@ -231,16 +267,16 @@ export default async function MediaDetail({ slug, mediaType = "anime" }: MediaDe
               ))}
           </dl>
 
-          {/* Grouped "Where to watch / Where to read" links for titles that have no official embed */}
-          {!item.officialVideoId && streamingLinks.length > 0 && (
+          {/* STREAMING links: Where to watch/read (one entry per site, hide if empty) */}
+          {streamingLinks.length > 0 && (
             <div className="space-y-2 pt-2">
               <h3 className="text-sm font-semibold text-foreground">
-                {isManga ? "Where to Read" : "Where to Watch"}
+                {isManga ? "Where to read" : "Where to watch"}
               </h3>
               <div className="flex flex-wrap gap-2">
-                {streamingLinks.map((link, idx) => (
+                {streamingLinks.map((link) => (
                   <a
-                    key={`${link.site}-${idx}`}
+                    key={link.site}
                     href={link.url}
                     target="_blank"
                     rel="noopener noreferrer"
@@ -253,10 +289,10 @@ export default async function MediaDetail({ slug, mediaType = "anime" }: MediaDe
             </div>
           )}
 
-          {/* Trailer Button (Link-out only, never embedded) and Official/Community links */}
-          {(hasTrailer || otherLinks.length > 0) && (
+          {/* INFO links: Official links (one entry per site, hide if empty) */}
+          {(hasTrailer || infoLinks.length > 0) && (
             <div className="space-y-2 pt-2">
-              <h3 className="text-sm font-semibold text-foreground">Links & Media</h3>
+              <h3 className="text-sm font-semibold text-foreground">Official links</h3>
               <div className="flex flex-wrap items-center gap-2">
                 {hasTrailer && (
                   <Button asChild variant="outline" size="sm">
@@ -270,9 +306,9 @@ export default async function MediaDetail({ slug, mediaType = "anime" }: MediaDe
                     </a>
                   </Button>
                 )}
-                {otherLinks.map((link, idx) => (
+                {infoLinks.map((link) => (
                   <a
-                    key={`${link.site}-${idx}`}
+                    key={link.site}
                     href={link.url}
                     target="_blank"
                     rel="noopener noreferrer"
@@ -284,32 +320,49 @@ export default async function MediaDetail({ slug, mediaType = "anime" }: MediaDe
               </div>
             </div>
           )}
+
+          {/* SOCIAL links: once per site as small links at the bottom (hide if empty) */}
+          {socialLinks.length > 0 && (
+            <div className="pt-2 text-xs text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="font-medium text-foreground">Social:</span>
+              {socialLinks.map((link) => (
+                <a
+                  key={link.site}
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-foreground hover:underline transition-colors"
+                >
+                  {link.site}
+                </a>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Official In-Site Player (rendered only when official_video_id is not null) */}
-      {item.officialVideoId && (
-        <section className="space-y-3">
-          <h2 className="text-xl font-bold">Watch on NAYOZU</h2>
-          <div className="relative aspect-video w-full max-w-4xl overflow-hidden rounded-xl border bg-black shadow-lg">
-            <iframe
-              src={
-                item.officialVideoKind === "playlist"
-                  ? `https://www.youtube-nocookie.com/embed/videoseries?list=${encodeURIComponent(item.officialVideoId)}`
-                  : `https://www.youtube-nocookie.com/embed/${encodeURIComponent(item.officialVideoId)}`
-              }
-              title={`${item.title} - Official Video`}
-              loading="lazy"
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-              allowFullScreen
-              className="absolute inset-0 h-full w-full border-0"
-            />
-          </div>
-          {item.officialVideoCredit && (
-            <p className="text-xs text-muted-foreground">
-              Official upload by {item.officialVideoCredit}
-            </p>
-          )}
+      {/* In-Site Experience: Video Player for Anime, Chapter Reader for Manga */}
+      {!isManga && videoEpisodes.length > 0 && (
+        <section className="space-y-4">
+          <MediaPlayer
+            animeId={String(item.external_id)}
+            title={item.title}
+            episodes={videoEpisodes}
+            initialProgress={userProgress}
+            userId={userId}
+          />
+        </section>
+      )}
+
+      {isManga && mangaChapters.length > 0 && (
+        <section className="space-y-4">
+          <MangaReader
+            animeId={String(item.external_id)}
+            title={item.title}
+            chapters={mangaChapters}
+            initialProgress={userProgress}
+            userId={userId}
+          />
         </section>
       )}
 

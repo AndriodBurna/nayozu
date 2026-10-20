@@ -5,3 +5,9 @@
  * will all come back. Nothing was deleted.
  */
 export const AUTH_ENABLED = false;
+
+/**
+ * When false, only real official/authorized media streams and chapters are returned.
+ * When true, demo video streams and demo manga chapters are provided for UI testing.
+ */
+export const DEMO_MEDIA = false;
