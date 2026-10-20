@@ -1,38 +1,34 @@
 "use client";
 
 import { useState } from "react";
+import { Search } from "lucide-react";
 
 interface SearchBarProps {
-  onSubmit: (query: string) => void;
+  onSubmit?: (query: string) => void;
   placeholder?: string;
 }
 
 export default function SearchBar({
   onSubmit,
-  placeholder = "Search anime and manga...",
+  placeholder = "Search anime, manga, manhwa, or users...",
 }: SearchBarProps) {
   const [query, setQuery] = useState("");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSubmit(query);
+    if (onSubmit) onSubmit(query);
   };
 
   return (
-    <form onSubmit={handleSubmit} className="relative w-64">
+    <form onSubmit={handleSubmit} className="relative w-full max-w-xl">
+      <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
       <input
         type="text"
         placeholder={placeholder}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        className="w-full rounded-lg bg-[#101827/80] border border-white/20 px-4 py-2 text-sm text-[#F4F6FC] placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#7047F5] focus:border-transparent"
+        className="h-10 w-full rounded-xl border border-[#1f263c] bg-[#101422] pl-10 pr-4 text-sm text-white placeholder-zinc-500 transition-colors focus:border-[#6d44f6] focus:outline-none focus:ring-1 focus:ring-[#6d44f6]"
       />
-      <button
-        type="submit"
-        className="absolute right-0 top-0 bottom-0 w-10 bg-[#7047F5] text-white hover:bg-[#5D35DF] rounded-r-lg"
-      >
-        Search
-      </button>
     </form>
   );
 }
