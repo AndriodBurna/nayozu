@@ -10,7 +10,7 @@ import MediaPlayer from "@/components/media-player";
 import MangaReader from "@/components/manga-reader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AUTH_ENABLED } from "@/lib/features";
+import { AUTH_ENABLED, ENABLE_ANIMESDK } from "@/lib/features";
 import { normalizeAnime, type AnimeRow } from "@/lib/services/normalizeAnime";
 import { createClient } from "@/lib/supabase/server";
 import type { MediaType } from "@/lib/services/animeService";
@@ -342,7 +342,7 @@ export default async function MediaDetail({ slug, mediaType = "anime" }: MediaDe
       </div>
 
       {/* In-Site Experience: Video Player for Anime, Chapter Reader for Manga */}
-      {!isManga && videoEpisodes.length > 0 && (
+      {!isManga && (videoEpisodes.length > 0 || ENABLE_ANIMESDK) && (
         <section className="space-y-4">
           <MediaPlayer
             animeId={String(item.external_id)}

@@ -11,3 +11,9 @@ export const AUTH_ENABLED = false;
  * When true, demo video streams and demo manga chapters are provided for UI testing.
  */
 export const DEMO_MEDIA = false;
+
+/**
+ * Experimental anime streaming via hexxt-git/anime-sdk.
+ * When enabled, in-player provider switching and the /test-stream route are activated.
+ */
+export const ENABLE_ANIMESDK = true;
