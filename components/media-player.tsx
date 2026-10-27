@@ -6,12 +6,12 @@ import {
   Play,
   Check,
   AlertCircle,
-  Info,
   Loader2,
   RefreshCw,
   Server,
   Subtitles,
   Tv,
+  Languages,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,19 +23,19 @@ import {
 } from "@/lib/providers/mediaProviderAdapter";
 import {
   ANIMESDK_PROVIDERS,
-  type AnimeSdkProviderId,
   type SdkStreamData,
   type SdkEpisodeUnit,
   type SdkSubtitle,
 } from "@/lib/services/animeSdkService";
 
 interface MediaPlayerProps {
-  animeId: string; // external_id as string
+  animeId: string; // external_id as string (AniList ID on detail pages)
   title: string;
   episodes: VideoEpisode[];
   initialProgress?: number;
   userId?: string | null;
   initialProvider?: string;
+  initialLanguage?: "sub" | "dub";
 }
 
 export default function MediaPlayer({
@@ -45,6 +45,7 @@ export default function MediaPlayer({
   initialProgress = 0,
   userId,
   initialProvider,
+  initialLanguage = "sub",
 }: MediaPlayerProps) {
   const router = useRouter();
   const [supabase] = useState(() => createClient());
@@ -52,27 +53,29 @@ export default function MediaPlayer({
   // Has official video provided from database?
   const hasOfficialStream = episodes.length > 0;
 
-  // Selected provider: "official", "auto", or a specific AnimeSDK provider ID
+  // Selected provider: "official", "auto", or a specific Anivexa / AnimeSDK provider ID
   const [selectedProvider, setSelectedProvider] = useState<string>(() => {
     if (initialProvider) return initialProvider;
     if (hasOfficialStream) return "official";
     return ENABLE_ANIMESDK ? "auto" : "official";
   });
 
+  // Audio language: "sub" | "dub"
+  const [selectedLanguage, setSelectedLanguage] = useState<"sub" | "dub">(initialLanguage);
+
   // Providers list & health status from /api/anime-sdk/providers
   const [sdkServerOnline, setSdkServerOnline] = useState<boolean | null>(null);
   const [providerList, setProviderList] = useState<
-    Array<{ id: string; name: string; label: string; available: boolean; status: string }>
+    Array<{ id: string; name: string; label: string; available: boolean; status: string; emaSeconds?: number }>
   >([]);
 
-  // State for AnimeSDK stream resolution
+  // State for AnimeSDK/Anivexa stream resolution
   const [sdkLoading, setSdkLoading] = useState(false);
   const [sdkError, setSdkError] = useState<string | null>(null);
   const [resolvedProvider, setResolvedProvider] = useState<string | null>(null);
   const [sdkEpisodes, setSdkEpisodes] = useState<SdkEpisodeUnit[]>([]);
   const [sdkActiveUnit, setSdkActiveUnit] = useState<SdkEpisodeUnit | null>(null);
   const [sdkStream, setSdkStream] = useState<SdkStreamData | null>(null);
-  const [activeSubtitle, setActiveSubtitle] = useState<string>("off");
 
   // Official stream episode index
   const [officialEpIndex, setOfficialEpIndex] = useState(() => {
@@ -103,7 +106,7 @@ export default function MediaPlayer({
   // Active official episode (if official stream is selected)
   const activeOfficialEp = episodes[officialEpIndex] || episodes[0];
 
-  // 1. Fetch AnimeSDK providers and server status when enabled
+  // 1. Fetch providers and server status when enabled
   useEffect(() => {
     if (!ENABLE_ANIMESDK) return;
 
@@ -133,26 +136,32 @@ export default function MediaPlayer({
     };
   }, []);
 
-  // 2. Resolve AnimeSDK stream when provider is "auto" or an AnimeSDK provider ID
+  // 2. Resolve stream when provider is "auto" or an Anivexa/AnimeSDK provider ID
   const resolveSdk = useCallback(
-    async (provId: string, epNum = 1) => {
+    async (provId: string, epNum = 1, lang: "sub" | "dub" = selectedLanguage) => {
       if (!ENABLE_ANIMESDK) return;
 
       setSdkLoading(true);
       setSdkError(null);
       setHlsError(null);
       setHlsLoading(false);
-      // Drop state from any previously resolved provider so its unit IDs and
-      // episode count are never shown or sent to a different provider.
       setSdkStream(null);
       setResolvedProvider(null);
       setSdkEpisodes([]);
       setSdkActiveUnit(null);
 
       try {
-        const url = `/api/anime-sdk/resolve?title=${encodeURIComponent(
-          title
-        )}&provider=${encodeURIComponent(provId)}&episode=${epNum}&language=sub`;
+        const params = new URLSearchParams({
+          title,
+          provider: provId,
+          episode: String(epNum),
+          language: lang,
+        });
+        if (animeId && /^\d+$/.test(animeId)) {
+          params.set("anilistId", animeId);
+        }
+
+        const url = `/api/anime-sdk/resolve?${params.toString()}`;
         const res = await fetch(url, { cache: "no-store" });
         const data = await res.json();
 
@@ -164,7 +173,7 @@ export default function MediaPlayer({
         } else {
           setSdkError(
             data.error ||
-              `Could not resolve stream with ${
+              `Could not resolve ${lang.toUpperCase()} stream with ${
                 provId === "auto" ? "any available provider" : provId
               }.`
           );
@@ -174,32 +183,32 @@ export default function MediaPlayer({
         setSdkError(
           err instanceof Error
             ? err.message
-            : "Failed to communicate with AnimeSDK resolution service."
+            : "Failed to communicate with streaming resolution service."
         );
         setSdkStream(null);
       } finally {
         setSdkLoading(false);
       }
     },
-    [title]
+    [title, animeId, selectedLanguage]
   );
 
-  // Trigger resolution when AnimeSDK provider is selected
+  // Trigger resolution when provider or language changes
   useEffect(() => {
     if (selectedProvider !== "official" && ENABLE_ANIMESDK) {
-      resolveSdk(selectedProvider, 1);
+      const targetEp = sdkActiveUnit?.number || 1;
+      resolveSdk(selectedProvider, targetEp, selectedLanguage);
     }
-  }, [selectedProvider, resolveSdk]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProvider, selectedLanguage, title, animeId]);
 
-  // 3. Switch episode within AnimeSDK
+  // 3. Switch episode within AnimeSDK/Anivexa
   const handleSdkEpisodeSelect = async (unit: SdkEpisodeUnit) => {
     if (!resolvedProvider) return;
     setSdkActiveUnit(unit);
     setHlsLoading(true);
     setHlsError(null);
 
-    // Providers can list several units per episode number: try the clicked
-    // one first, then its siblings, before showing an error.
     const candidates = [
       unit,
       ...sdkEpisodes.filter((u) => u.number === unit.number && u.id !== unit.id),
@@ -211,7 +220,9 @@ export default function MediaPlayer({
       try {
         const url = `/api/anime-sdk/stream?provider=${encodeURIComponent(
           resolvedProvider
-        )}&unitId=${encodeURIComponent(candidate.id)}&language=sub`;
+        )}&unitId=${encodeURIComponent(candidate.id)}&language=${encodeURIComponent(
+          selectedLanguage
+        )}`;
         const res = await fetch(url, { cache: "no-store" });
         const data = await res.json();
         if (data.success && data.stream) {
@@ -234,13 +245,13 @@ export default function MediaPlayer({
     }
   };
 
-  // 4. Attach HLS.js to <video> when stream URL updates
+  // 4. Attach HLS.js (or native MP4/HLS) to <video> when stream URL updates
   const primaryStreamItem = sdkStream?.streams?.[0];
   const streamSourceUrl = primaryStreamItem?.sourceUrl;
+  const isDirectMp4 = primaryStreamItem?.isHLS === false;
 
   useEffect(() => {
     if (selectedProvider === "official" || !streamSourceUrl || !videoRef.current) {
-      // No stream to attach (cleared or failed): make sure no spinner is left over
       setHlsLoading(false);
       return;
     }
@@ -252,16 +263,31 @@ export default function MediaPlayer({
 
     let isSubscribed = true;
 
-    async function initHls() {
-      // Dynamic import to guarantee safe browser execution
-      const HlsModule = (await import("hls.js")).default;
-
-      if (!currentSourceUrl || !videoEl) return;
-
+    async function initPlayback() {
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
+
+      // Direct MP4 stream support (returned by some Anivexa providers like animegg / mkissa / anibd)
+      if (isDirectMp4) {
+        videoEl.src = currentSourceUrl;
+        const onLoaded = () => {
+          if (isSubscribed) setHlsLoading(false);
+        };
+        const onError = () => {
+          if (isSubscribed) {
+            setHlsLoading(false);
+            setHlsError("Playback failed on direct MP4 stream.");
+          }
+        };
+        videoEl.addEventListener("loadedmetadata", onLoaded, { once: true });
+        videoEl.addEventListener("error", onError, { once: true });
+        return;
+      }
+
+      const HlsModule = (await import("hls.js")).default;
+      if (!currentSourceUrl || !videoEl || !isSubscribed) return;
 
       if (HlsModule.isSupported()) {
         const hls = new HlsModule({
@@ -280,37 +306,44 @@ export default function MediaPlayer({
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         hls.on(HlsModule.Events.ERROR, (_event: string, data: any) => {
-  if (data.fatal) {
-    console.error("[HLS.js Fatal Error]", {
-      type: data.type,
-      details: data.details,
-      fatal: data.fatal,
-      url: data.url,
-      response: data.response,
-      error: data.error?.message,
-      reason: data.reason,
-    });
+          if (data.fatal) {
+            console.error("[HLS.js Fatal Error]", {
+              type: data.type,
+              details: data.details,
+              fatal: data.fatal,
+              url: data.url,
+              response: data.response,
+              error: data.error?.message,
+              reason: data.reason,
+            });
 
-    if (isSubscribed) {
-      setHlsLoading(false);
-      setHlsError(
-        `Playback failed: ${data.details ?? data.type ?? "Unknown HLS error"}`
-      );
-    }
-  }
-});
-      } else if (videoEl.canPlayType("application/vnd.apple.mpegurl")) {
-        // Native Safari HLS
-        videoEl.src = currentSourceUrl;
-        videoEl.addEventListener("loadedmetadata", () => {
-          if (isSubscribed) setHlsLoading(false);
-        });
-        videoEl.addEventListener("error", () => {
-          if (isSubscribed) {
-            setHlsLoading(false);
-            setHlsError("Playback error on native video player.");
+            if (isSubscribed) {
+              setHlsLoading(false);
+              setHlsError(
+                `Playback failed: ${data.details ?? data.type ?? "Unknown HLS error"}`
+              );
+            }
           }
         });
+      } else if (videoEl.canPlayType("application/vnd.apple.mpegurl")) {
+        videoEl.src = currentSourceUrl;
+        videoEl.addEventListener(
+          "loadedmetadata",
+          () => {
+            if (isSubscribed) setHlsLoading(false);
+          },
+          { once: true }
+        );
+        videoEl.addEventListener(
+          "error",
+          () => {
+            if (isSubscribed) {
+              setHlsLoading(false);
+              setHlsError("Playback error on native video player.");
+            }
+          },
+          { once: true }
+        );
       } else {
         if (isSubscribed) {
           setHlsLoading(false);
@@ -319,7 +352,7 @@ export default function MediaPlayer({
       }
     }
 
-    initHls();
+    initPlayback();
 
     return () => {
       isSubscribed = false;
@@ -328,7 +361,7 @@ export default function MediaPlayer({
         hlsRef.current = null;
       }
     };
-  }, [selectedProvider, streamSourceUrl]);
+  }, [selectedProvider, streamSourceUrl, isDirectMp4]);
 
   // Update progress helper
   const updateProgress = async (newProgress: number, totalEpisodes: number) => {
@@ -373,9 +406,10 @@ export default function MediaPlayer({
   };
 
   const isOfficial = selectedProvider === "official";
-  const isValidOfficialUrl = isOfficial && activeOfficialEp
-    ? isAllowedEmbedUrl(activeOfficialEp.embedUrl)
-    : false;
+  const isValidOfficialUrl =
+    isOfficial && activeOfficialEp
+      ? isAllowedEmbedUrl(activeOfficialEp.embedUrl)
+      : false;
 
   const currentEpNumber = isOfficial
     ? activeOfficialEp?.number || 1
@@ -385,7 +419,7 @@ export default function MediaPlayer({
 
   return (
     <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-4 sm:p-6 shadow-sm">
-      {/* Header Bar with Title, Badges, and Provider Selector */}
+      {/* Header Bar with Title, Badges, Audio Toggle, and Provider Selector */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-border pb-4">
         <div>
           <div className="flex flex-wrap items-center gap-2">
@@ -413,11 +447,17 @@ export default function MediaPlayer({
                 variant="outline"
                 className="text-sky-400 border-sky-400/30 bg-sky-500/10"
               >
-                AnimeSDK {resolvedProvider ? `— ${resolvedProvider}` : ""}
+                {resolvedProvider ? `Stream — ${resolvedProvider}` : "Anivexa / Kuhi"}
               </Badge>
             )}
 
-            {/* Server status indicator for AnimeSDK */}
+            {!isOfficial && (
+              <Badge variant="secondary" className="text-[10px] uppercase">
+                {selectedLanguage}
+              </Badge>
+            )}
+
+            {/* Server status indicator */}
             {ENABLE_ANIMESDK && sdkServerOnline === false && (
               <Badge
                 variant="destructive"
@@ -436,13 +476,43 @@ export default function MediaPlayer({
           )}
           {!isOfficial && resolvedProvider && (
             <p className="text-xs text-muted-foreground mt-0.5">
-              Playing via AnimeSDK ({resolvedProvider}) • {uniqueSdkEpisodes.length} episodes available
+              Playing via {resolvedProvider} ({selectedLanguage.toUpperCase()}) •{" "}
+              {uniqueSdkEpisodes.length} episodes available
             </p>
           )}
         </div>
 
-        {/* Right side: Provider Selector & Progress Tracker */}
+        {/* Right side: Sub/Dub Toggle, Provider Selector & Progress Tracker */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Sub / Dub Audio Toggle */}
+          {ENABLE_ANIMESDK && !isOfficial && (
+            <div className="inline-flex items-center rounded-md border border-input bg-background p-0.5 text-xs">
+              <Languages className="h-3.5 w-3.5 text-muted-foreground ml-1.5 mr-1" />
+              <button
+                type="button"
+                onClick={() => setSelectedLanguage("sub")}
+                className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${
+                  selectedLanguage === "sub"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                SUB
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedLanguage("dub")}
+                className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${
+                  selectedLanguage === "dub"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                DUB
+              </button>
+            </div>
+          )}
+
           {/* In-Player Provider Selector */}
           {ENABLE_ANIMESDK && (
             <div className="flex items-center gap-1.5">
@@ -460,14 +530,14 @@ export default function MediaPlayer({
                 className="h-8 rounded-md border border-input bg-background px-2.5 py-1 text-xs font-medium text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
               >
                 {/* Auto provider */}
-                <option value="auto">Auto (Best Available)</option>
+                <option value="auto">Auto (Fastest Race)</option>
 
                 {/* Official video if configured */}
                 {hasOfficialStream && (
                   <option value="official">Official Stream (YouTube)</option>
                 )}
 
-                {/* AnimeSDK providers */}
+                {/* Anivexa + AnimeSDK providers */}
                 {ANIMESDK_PROVIDERS.filter((p) => p.id !== "auto").map((p) => {
                   const meta = providerList.find((item) => item.id === p.id);
                   const isAvailable = meta ? meta.available : true;
@@ -478,6 +548,7 @@ export default function MediaPlayer({
                       disabled={meta ? !isAvailable : false}
                     >
                       {p.label}
+                      {meta?.emaSeconds ? ` (${meta.emaSeconds.toFixed(1)}s)` : ""}
                       {meta && !meta.available ? " (Offline)" : ""}
                     </option>
                   );
@@ -523,8 +594,8 @@ export default function MediaPlayer({
         <div className="flex items-start gap-2.5 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-500">
           <Server className="h-4 w-4 shrink-0 mt-0.5" />
           <div>
-            <span className="font-semibold">AnimeSDK Server Offline: </span>
-            The standalone streaming server is not currently running on port 4000.
+            <span className="font-semibold">Streaming Server Offline: </span>
+            The unified streaming server is not currently running on port 4000.
             To enable in-site playback, run:{" "}
             <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground">
               npm run sdk:server
@@ -543,16 +614,18 @@ export default function MediaPlayer({
           </div>
         )}
 
-        {/* Loading overlay for AnimeSDK resolution / HLS */}
+        {/* Loading overlay for AnimeSDK/Anivexa resolution / HLS */}
         {!isOfficial && (sdkLoading || hlsLoading) && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/80 text-muted-foreground backdrop-blur-sm">
             <Loader2 className="h-8 w-8 animate-spin text-primary mb-2" />
             <p className="text-xs">
               {sdkLoading
-                ? `Resolving stream with ${
-                    selectedProvider === "auto" ? "best available provider" : selectedProvider
-                  }...`
-                : "Buffering HLS video stream..."}
+                ? `Racing providers for ${
+                    selectedProvider === "auto"
+                      ? "fastest stream"
+                      : selectedProvider
+                  } (${selectedLanguage.toUpperCase()})...`
+                : "Buffering video stream..."}
             </p>
           </div>
         )}
@@ -577,7 +650,7 @@ export default function MediaPlayer({
                     onClick={() => setSelectedProvider("auto")}
                     className="mt-4 text-xs"
                   >
-                    Try AnimeSDK Providers
+                    Try Anivexa / AnimeSDK Providers
                   </Button>
                 )}
               </div>
@@ -600,7 +673,7 @@ export default function MediaPlayer({
           </>
         )}
 
-        {/* CASE B: AnimeSDK Stream (HTML5 Video + HLS.js) */}
+        {/* CASE B: Anivexa / AnimeSDK Stream (HTML5 Video + HLS.js / MP4) */}
         {!isOfficial && (
           <>
             {sdkError || hlsError ? (
@@ -616,12 +689,24 @@ export default function MediaPlayer({
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => resolveSdk(selectedProvider, currentEpNumber)}
+                    onClick={() =>
+                      resolveSdk(selectedProvider, currentEpNumber, selectedLanguage)
+                    }
                     className="text-xs"
                   >
                     <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
                     Retry Playback
                   </Button>
+                  {selectedLanguage === "dub" && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setSelectedLanguage("sub")}
+                      className="text-xs"
+                    >
+                      Try SUB Audio
+                    </Button>
+                  )}
                   {selectedProvider !== "auto" && (
                     <Button
                       variant="default"
@@ -629,7 +714,7 @@ export default function MediaPlayer({
                       onClick={() => setSelectedProvider("auto")}
                       className="text-xs"
                     >
-                      Switch to Auto Fallback
+                      Switch to Auto Race
                     </Button>
                   )}
                   {hasOfficialStream && (
@@ -669,15 +754,15 @@ export default function MediaPlayer({
         )}
       </div>
 
-      {/* AnimeSDK Subtitle Track Quick Selector (if subtitles returned) */}
+      {/* Subtitle Track Quick Selector (if subtitles returned) */}
       {!isOfficial && primaryStreamItem?.subtitles && primaryStreamItem.subtitles.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <Subtitles className="h-3.5 w-3.5 text-foreground" />
           <span className="font-medium text-foreground">Subtitles:</span>
           <div className="flex flex-wrap gap-1.5">
-            {primaryStreamItem.subtitles.map((sub: SdkSubtitle) => (
+            {primaryStreamItem.subtitles.map((sub: SdkSubtitle, idx: number) => (
               <Badge
-                key={sub.language}
+                key={`${sub.language}-${idx}`}
                 variant="secondary"
                 className="cursor-pointer text-[11px] font-normal hover:bg-secondary/80"
               >
@@ -727,7 +812,7 @@ export default function MediaPlayer({
         </div>
       )}
 
-      {/* Episode selector tabs: for AnimeSDK stream */}
+      {/* Episode selector tabs: for Anivexa / AnimeSDK stream */}
       {!isOfficial && uniqueSdkEpisodes.length > 1 && (
         <div className="space-y-2 pt-2">
           <div className="flex items-center justify-between">

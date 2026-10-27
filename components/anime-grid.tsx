@@ -8,9 +8,15 @@ interface AnimeGridProps {
   userId?: string | null;
   /** Kept so existing callers still compile; the grid sizes itself (see .anime-grid in globals.css). */
   columns?: number;
+  showExtendedMeta?: boolean;
 }
 
-export default function AnimeGrid({ anime, libraryEntries, userId }: AnimeGridProps) {
+export default function AnimeGrid({
+  anime,
+  libraryEntries,
+  userId,
+  showExtendedMeta = false,
+}: AnimeGridProps) {
   const libraryMap = buildLibraryMap(libraryEntries);
 
   return (
@@ -22,17 +28,16 @@ export default function AnimeGrid({ anime, libraryEntries, userId }: AnimeGridPr
           title={item.title}
           image={item.image}
           averageScore={item.averageScore}
-          genres={item.genres.map((g) => g.name)}
-          year={item.year}
-          synopsis={item.synopsis}
           episodes={item.episodes}
-          chapters={item.chapters}
-          volumes={item.volumes}
-          status={item.status}
           slug={item.slug}
           mediaType={item.mediaType || (item.media_type as "anime" | "manga") || "anime"}
-          libraryEntry={libraryMap.get(String(item.external_id))}
-          userId={userId}
+          format={item.format}
+          year={item.year}
+          season={item.season}
+          status={item.status}
+          genres={item.genres?.map((g) => g.name)}
+          synopsis={item.synopsis}
+          showExtendedMeta={showExtendedMeta}
         />
       ))}
     </div>

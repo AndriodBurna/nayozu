@@ -4,7 +4,7 @@ export const PROXY_SECRET =
   process.env.ANIMESDK_SIGN_SECRET || "nayozu-anime-sdk-hmac-key";
 
 /**
- * Strict allowlist of upstream provider and CDN hostnames to prevent open-proxy abuse.
+ * Known upstream provider and CDN hostnames.
  */
 export const ALLOWED_PROXY_HOSTS: readonly string[] = [
   "animeparadise.moe",
@@ -22,7 +22,71 @@ export const ALLOWED_PROXY_HOSTS: readonly string[] = [
   "mp4upload.com",
   "anifast.stream",
   "bunnycdn.ru",
+  "anineko.to",
+  "anizone.to",
+  "seiryuu.vid-cdn.xyz",
+  "vid-cdn.xyz",
+  "reanime.to",
+  "flixcloud.cc",
+  "aniwaves.ru",
+  "krussdomi.com",
+  "kickassanime.mx",
+  "kaast1.com",
+  "animegg.org",
+  "mkissa.to",
+  "mkissa.net",
+  "animeonsen.xyz",
+  "senshi.live",
+  "anime-dunya.com",
+  "echovideo.ru",
+  "upn.one",
+  "vidmoly.net",
+  "vidcloud.se",
+  "miruro.ru",
+  "miruro.bz",
+  "miruro.online",
 ];
+
+/**
+ * Checks whether a hostname is a loopback, link-local, or private RFC1918 address (SSRF protection).
+ */
+export function isPrivateOrLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (
+    !host ||
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local") ||
+    host.endsWith(".internal") ||
+    host === "0.0.0.0" ||
+    host === "::" ||
+    host === "::1" ||
+    host.startsWith("fe80:") ||
+    host.startsWith("fc00:") ||
+    host.startsWith("fd00:")
+  ) {
+    return true;
+  }
+
+  // IPv4 numeric check
+  const ipv4Match = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4Match) {
+    const [a, b] = [Number(ipv4Match[1]), Number(ipv4Match[2])];
+    if (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 /**
  * Computes an HMAC-SHA256 signature for a target URL and optional encoded headers.
@@ -50,14 +114,28 @@ export function timingSafeEquals(a?: string | null, b?: string | null): boolean 
 }
 
 /**
- * Checks whether a target URL's hostname belongs to the allowed hostnames.
+ * Checks whether a target URL is a valid public HTTP/HTTPS URL safe for signed proxying.
+ * Blocks private/loopback/local IP ranges (SSRF protection) while allowing known and dynamic CDNs.
  */
 export function isAllowedProxyHost(rawUrl: string): boolean {
   try {
-    const host = new URL(rawUrl).hostname.toLowerCase();
-    return ALLOWED_PROXY_HOSTS.some(
-      (allowed) => host === allowed || host.endsWith(`.${allowed}`)
-    );
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return false;
+    }
+    const host = parsed.hostname.toLowerCase();
+    if (isPrivateOrLoopbackHost(host)) {
+      return false;
+    }
+    if (
+      ALLOWED_PROXY_HOSTS.some(
+        (allowed) => host === allowed || host.endsWith(`.${allowed}`)
+      )
+    ) {
+      return true;
+    }
+    // Allow signed public CDN domains (must have a valid public TLD dot)
+    return host.includes(".");
   } catch {
     return false;
   }
@@ -127,6 +205,96 @@ export function rewriteHlsManifest(
     .join("\n");
 }
 
+/**
+ * Decrypts a FlixCloud Base64+XOR encrypted HLS manifest if it does not already start with #EXTM3U.
+ */
+export function decryptFlixCloudManifest(
+  rawTextOrBuffer: string | Buffer,
+  playlistKey?: string | null
+): string {
+  const text =
+    typeof rawTextOrBuffer === "string"
+      ? rawTextOrBuffer.trim()
+      : rawTextOrBuffer.toString("utf8").trim();
+
+  if (text.startsWith("#EXTM3U") || !playlistKey) {
+    return text;
+  }
+
+  try {
+    const key = Buffer.from(playlistKey, "base64");
+    if (!key.length) return text;
+    const payload = Buffer.from(text, "base64");
+    const out = Buffer.alloc(payload.length);
+    for (let i = 0; i < payload.length; i++) {
+      out[i] = payload[i] ^ key[i % key.length];
+    }
+    const decoded = out.toString("utf8").trim();
+    if (decoded.startsWith("#EXTM3U")) {
+      return decoded;
+    }
+  } catch {
+    // Fallback to raw text
+  }
+  return text;
+}
+
+const FLIX_IMAGE_SEGMENT_XOR_KEY = Uint8Array.from([
+  157, 42, 241, 71, 179, 142, 92, 112, 166, 25, 228, 59, 216, 98, 15, 197,
+]);
+
+/**
+ * Unwraps FlixCloud HD-2 PNG/WebP-disguised MPEG-TS segments.
+ */
+export function unwrapFlixImageSegment(bodyBuffer: Buffer): {
+  body: Buffer;
+  unwrapped: boolean;
+} {
+  let offset = 0;
+  let needsXor = false;
+
+  const isWebp =
+    bodyBuffer.length > 12 &&
+    bodyBuffer[0] === 0x52 &&
+    bodyBuffer[1] === 0x49 &&
+    bodyBuffer[2] === 0x46 &&
+    bodyBuffer[3] === 0x46 &&
+    bodyBuffer[8] === 0x57 &&
+    bodyBuffer[9] === 0x45 &&
+    bodyBuffer[10] === 0x42 &&
+    bodyBuffer[11] === 0x50;
+
+  const isPng =
+    bodyBuffer.length > 8 &&
+    bodyBuffer[0] === 0x89 &&
+    bodyBuffer[1] === 0x50 &&
+    bodyBuffer[2] === 0x4e &&
+    bodyBuffer[3] === 0x47 &&
+    bodyBuffer[4] === 0x0d &&
+    bodyBuffer[5] === 0x0a &&
+    bodyBuffer[6] === 0x1a &&
+    bodyBuffer[7] === 0x0a;
+
+  if (isWebp) {
+    offset = 12;
+    needsXor = bodyBuffer[offset] !== 0x47;
+  } else if (isPng) {
+    offset = 8;
+    needsXor = bodyBuffer[offset] !== 0x47;
+  }
+
+  if (!offset) return { body: bodyBuffer, unwrapped: false };
+
+  const out = Buffer.from(bodyBuffer.subarray(offset));
+  if (needsXor) {
+    for (let i = 0; i < out.length; i++) {
+      out[i] ^= FLIX_IMAGE_SEGMENT_XOR_KEY[i % FLIX_IMAGE_SEGMENT_XOR_KEY.length];
+    }
+  }
+
+  return { body: out, unwrapped: true };
+}
+
 export interface MinimalStreamData {
   type: "video";
   streams: Array<{
@@ -135,6 +303,7 @@ export interface MinimalStreamData {
     quality?: string;
     language?: string;
     headers?: Record<string, string>;
+    playlistKey?: string | null;
     subtitles?: Array<{
       url: string;
       label: string;
@@ -163,8 +332,16 @@ export function rewriteStreamToSameOriginProxy<T extends MinimalStreamData>(
           const parsed = new URL(s.sourceUrl, "http://localhost");
           targetUrl = parsed.searchParams.get("url") || targetUrl;
           hParam = parsed.searchParams.get("h");
-        } else if (s.headers && Object.keys(s.headers).length > 0) {
-          hParam = Buffer.from(JSON.stringify(s.headers)).toString("base64");
+        } else {
+          const payloadObj: Record<string, string> = {
+            ...(s.headers || {}),
+          };
+          if (s.playlistKey) {
+            payloadObj.__flixKey = s.playlistKey;
+          }
+          if (Object.keys(payloadObj).length > 0) {
+            hParam = Buffer.from(JSON.stringify(payloadObj)).toString("base64");
+          }
         }
       } catch {
         // Fallback to original

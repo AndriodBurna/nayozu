@@ -1,18 +1,27 @@
 "use client";
 
 import Link from "next/link";
-import { Flame, Bell, Sparkles, PanelRight } from "lucide-react";
+import { Flame, Bell, Sparkles, PanelRight, Menu } from "lucide-react";
 import SearchBar from "@/components/search-bar";
 import AccentSettings from "@/components/accent-settings";
 import { useShell } from "@/components/shell-context";
 
 export default function Header() {
-  const { user, toggleRight } = useShell();
+  const { user, toggleRight, toggleLeft } = useShell();
 
   return (
     <header className="sticky top-0 z-40 flex h-16 w-full items-center justify-between border-b border-[#1a1f30] bg-[#0b0e17]/95 px-4 backdrop-blur-md md:px-6">
-      {/* Logo & Category shortcuts */}
-      <div className="flex items-center gap-6">
+      {/* Mobile Menu Toggle & Logo */}
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={toggleLeft}
+          className="flex h-9 w-9 items-center justify-center rounded-xl text-zinc-400 hover:bg-[#151a2a] hover:text-white transition-colors md:hidden"
+          aria-label="Toggle navigation menu"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+
         <Link href="/" className="flex items-center gap-2">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-md transition-colors">
             <Flame className="h-5 w-5 fill-current" />
@@ -21,40 +30,6 @@ export default function Header() {
             NAYOZU
           </span>
         </Link>
-
-        {/* Quick Nav Pills (AnimeX style) */}
-        <nav className="hidden lg:flex items-center gap-1 text-sm font-medium">
-          <Link
-            href="/"
-            className="rounded-full bg-primary px-4 py-1.5 text-xs font-semibold text-primary-foreground transition-colors"
-          >
-            Home
-          </Link>
-          <Link
-            href="/anime"
-            className="rounded-full px-3 py-1.5 text-xs text-zinc-400 hover:text-white transition-colors"
-          >
-            Series
-          </Link>
-          <Link
-            href="/movies"
-            className="rounded-full px-3 py-1.5 text-xs text-zinc-400 hover:text-white transition-colors"
-          >
-            Movies
-          </Link>
-          <Link
-            href="/coming-soon"
-            className="rounded-full px-3 py-1.5 text-xs text-zinc-400 hover:text-white transition-colors"
-          >
-            Coming Soon
-          </Link>
-          <Link
-            href="/community"
-            className="rounded-full px-3 py-1.5 text-xs text-zinc-400 hover:text-white transition-colors"
-          >
-            Community
-          </Link>
-        </nav>
       </div>
 
       {/* Center Search Bar */}
@@ -107,9 +82,17 @@ export default function Header() {
             type="button"
             onClick={toggleRight}
             className="h-8 w-8 ml-1 overflow-hidden rounded-full border border-primary/40 bg-zinc-800 transition-colors"
+            title={
+              (user.user_metadata?.display_name as string | undefined) ||
+              user.email ||
+              "Account"
+            }
           >
             <img
-              src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80"
+              src={
+                (user.user_metadata?.avatar_url as string | undefined) ||
+                "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80"
+              }
               alt="User"
               className="h-full w-full object-cover"
             />

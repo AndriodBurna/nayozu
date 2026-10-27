@@ -11,22 +11,24 @@ export async function GET(request: NextRequest) {
   }
 
   const { searchParams } = new URL(request.url);
-  const title = searchParams.get("title");
+  const title = searchParams.get("title") || "";
+  const anilistId = searchParams.get("anilistId");
   const provider = searchParams.get("provider") || "auto";
   const episodeStr = searchParams.get("episode");
   const episodeNumber = episodeStr ? parseInt(episodeStr, 10) : 1;
   const language = searchParams.get("language") || "sub";
 
-  if (!title) {
+  if (!title && !anilistId) {
     return NextResponse.json(
-      { success: false, error: "Missing required 'title' query parameter." },
+      { success: false, error: "Missing required 'title' or 'anilistId' query parameter." },
       { status: 400 }
     );
   }
 
   try {
     const result = await resolveAnimeStream({
-      title,
+      title: title || String(anilistId),
+      anilistId,
       provider,
       episodeNumber: isNaN(episodeNumber) ? 1 : episodeNumber,
       language,

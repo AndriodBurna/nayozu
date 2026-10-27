@@ -4,6 +4,7 @@ import "./globals.css";
 import Header from "@/components/header";
 import Sidebar from "@/components/sidebar";
 import RightPanel from "@/components/right-panel";
+import BottomNav from "@/components/bottom-nav";
 import { ShellProvider } from "@/components/shell-context";
 
 const geistSans = Geist({
@@ -36,13 +37,16 @@ export default function RootLayout({
             <Sidebar />
 
             {/* Main Center Content */}
-            <main className="min-w-0 flex-1 px-4 py-6 md:px-8">
+            <main className="min-w-0 flex-1 px-4 py-6 pb-20 md:px-8 md:pb-6">
               {children}
             </main>
 
             {/* Right Community / Friends / Watch Together Panel */}
             <RightPanel />
           </div>
+
+          {/* Mobile Bottom Navigation */}
+          <BottomNav />
         </ShellProvider>
       </body>
     </html>

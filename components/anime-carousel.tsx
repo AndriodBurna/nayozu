@@ -33,17 +33,9 @@ export default function AnimeCarousel({
               title={item.title}
               image={item.image}
               averageScore={item.averageScore}
-              genres={item.genres.map((g) => g.name)}
-              year={item.year}
-              synopsis={item.synopsis}
               episodes={item.episodes}
-              chapters={item.chapters}
-              volumes={item.volumes}
-              status={item.status}
               slug={item.slug}
               mediaType={item.mediaType || (item.media_type as "anime" | "manga") || "anime"}
-              libraryEntry={libraryMap.get(String(item.external_id))}
-              userId={userId}
             />
           </div>
         ))}

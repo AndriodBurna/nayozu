@@ -23,6 +23,9 @@ const toAnimeList = (data: unknown): Anime[] =>
 
 export type MediaType = "anime" | "manga";
 
+export const SERIES_FORMATS = ["TV", "TV_SHORT", "ONA", "OVA", "SPECIAL"] as const;
+export const MOVIE_FORMAT = "MOVIE" as const;
+
 /* ------------------------------------------------------------------ */
 /* Lists for the home page / carousels                                 */
 /* ------------------------------------------------------------------ */
@@ -156,8 +159,13 @@ export interface AnimePageParams {
   pageSize?: number;
   search?: string;
   genre?: string; // genre NAME, e.g. "Action"
-  sort?: string; // "popularity" | "score" | "newest"
+  sort?: string; // "popularity" | "score" | "newest" | "release_date"
   mediaType?: MediaType;
+  format?: string;
+  formats?: readonly string[];
+  excludeFormats?: readonly string[];
+  status?: string;
+  excludeStatuses?: readonly string[];
 }
 
 export const getAnimePage = async ({
@@ -167,6 +175,11 @@ export const getAnimePage = async ({
   genre,
   sort = "popularity",
   mediaType = "anime",
+  format,
+  formats,
+  excludeFormats,
+  status,
+  excludeStatuses,
 }: AnimePageParams): Promise<{ items: Anime[]; total: number }> => {
   const from = (Math.max(page, 1) - 1) * pageSize;
   const to = from + pageSize - 1;
@@ -184,22 +197,49 @@ export const getAnimePage = async ({
     .eq("media_type", mediaType);
 
   if (genre) query = query.eq("genre_filter.genres.name", genre);
+  if (format) {
+    query = query.eq("format", format);
+  } else if (formats && formats.length > 0) {
+    query = query.in("format", [...formats]);
+  }
+  if (excludeFormats && excludeFormats.length > 0) {
+    for (const fmt of excludeFormats) {
+      query = query.neq("format", fmt);
+    }
+  }
+  if (status) {
+    query = query.eq("status", status);
+  }
+  if (excludeStatuses && excludeStatuses.length > 0) {
+    for (const st of excludeStatuses) {
+      query = query.neq("status", st);
+    }
+  }
 
   const term = search ? cleanSearch(search) : "";
   if (term) {
     query = query.or(`title_romaji.ilike.%${term}%,title_english.ilike.%${term}%`);
   }
 
-  const column =
-    sort === "score" ? "average_score" : sort === "newest" ? "season_year" : "popularity";
+  if (sort === "release_date") {
+    // Nearest known release year first, unknown (NULL) dates last, ties broken by popularity
+    query = query
+      .order("season_year", { ascending: true, nullsFirst: false })
+      .order("popularity", { ascending: false, nullsFirst: false })
+      .order("id")
+      .range(from, to);
+  } else {
+    const column =
+      sort === "score" ? "average_score" : sort === "newest" ? "season_year" : "popularity";
 
-  // nullsFirst:false matters: Postgres puts NULLs FIRST on descending sorts.
-  // The final .order("id") keeps pagination stable when values tie.
-  query = query
-    .order(column, { ascending: false, nullsFirst: false })
-    .order("popularity", { ascending: false, nullsFirst: false })
-    .order("id")
-    .range(from, to);
+    // nullsFirst:false matters: Postgres puts NULLs FIRST on descending sorts.
+    // The final .order("id") keeps pagination stable when values tie.
+    query = query
+      .order(column, { ascending: false, nullsFirst: false })
+      .order("popularity", { ascending: false, nullsFirst: false })
+      .order("id")
+      .range(from, to);
+  }
 
   const { data, error, count } = await query;
 

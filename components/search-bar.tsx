@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Search } from "lucide-react";
 
 interface SearchBarProps {
@@ -10,13 +11,18 @@ interface SearchBarProps {
 
 export default function SearchBar({
   onSubmit,
-  placeholder = "Search anime, manga, manhwa, or users...",
+  placeholder = "Search anime, manga, or users...",
 }: SearchBarProps) {
   const [query, setQuery] = useState("");
+  const router = useRouter();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (onSubmit) onSubmit(query);
+    if (onSubmit) {
+      onSubmit(query);
+    } else if (query.trim()) {
+      router.push(`/search?q=${encodeURIComponent(query.trim())}`);
+    }
   };
 
   return (
@@ -27,7 +33,7 @@ export default function SearchBar({
         placeholder={placeholder}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        className="h-10 w-full rounded-xl border border-[#1f263c] bg-[#101422] pl-10 pr-4 text-sm text-white placeholder-zinc-500 transition-colors focus:border-[#6d44f6] focus:outline-none focus:ring-1 focus:ring-[#6d44f6]"
+        className="h-10 w-full rounded-xl border border-[#1f263c] bg-[#101422] pl-10 pr-4 text-sm text-white placeholder-zinc-500 transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
       />
     </form>
   );

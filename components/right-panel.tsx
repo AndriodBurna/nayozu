@@ -168,10 +168,13 @@ export default function RightPanel() {
               </div>
             </div>
             <Button
+              asChild
               size="sm"
               className="h-7 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground hover:brightness-110"
             >
-              Join
+              <Link href="/watch-together" onClick={closeRight}>
+                Join
+              </Link>
             </Button>
           </div>
         </div>

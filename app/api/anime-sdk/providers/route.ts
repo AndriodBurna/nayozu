@@ -21,16 +21,20 @@ export async function GET() {
       };
     }
     const isRegistered = health.providers.includes(p.id);
+    const rankInfo = health.latencyRanking?.find((r) => r.name === p.id);
     return {
       ...p,
       available: health.ok && isRegistered,
       status: !health.ok ? "offline" : isRegistered ? "available" : "unregistered",
+      ...(rankInfo ? { emaSeconds: rankInfo.ema_seconds } : {}),
     };
   });
 
   return NextResponse.json({
     serverOnline: health.ok,
     proxyEnabled: health.proxy,
+    baseUrl: health.baseUrl,
+    latencyRanking: health.latencyRanking,
     providers,
   });
 }

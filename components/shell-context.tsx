@@ -10,6 +10,9 @@ interface ShellState {
   rightOpen: boolean;
   toggleRight: () => void;
   closeRight: () => void;
+  leftOpen: boolean;
+  toggleLeft: () => void;
+  closeLeft: () => void;
 }
 
 const ShellContext = createContext<ShellState | null>(null);
@@ -18,6 +21,7 @@ const STORAGE_KEY = "nayozu:right-panel";
 export function ShellProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [rightOpen, setRightOpen] = useState(false);
+  const [leftOpen, setLeftOpen] = useState(false);
 
   // Remembered choice; first visit: open only on wide screens.
   useEffect(() => {
@@ -54,8 +58,11 @@ export function ShellProvider({ children }: { children: React.ReactNode }) {
       rightOpen,
       toggleRight: () => setAndSave(!rightOpen),
       closeRight: () => setAndSave(false),
+      leftOpen,
+      toggleLeft: () => setLeftOpen((prev) => !prev),
+      closeLeft: () => setLeftOpen(false),
     }),
-    [user, rightOpen, setAndSave],
+    [user, rightOpen, setAndSave, leftOpen],
   );
 
   return <ShellContext.Provider value={value}>{children}</ShellContext.Provider>;

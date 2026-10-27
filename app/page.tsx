@@ -156,19 +156,27 @@ export default async function Home() {
               <Flame className="h-5 w-5 text-primary transition-colors" />
               <h2 className="text-xl font-bold text-white">Trending Anime</h2>
             </div>
-            <Link
-              href="/anime?filter=trending"
-              className="flex items-center text-xs font-semibold text-zinc-400 hover:text-primary transition-colors"
-            >
-              See All <ChevronRight className="h-4 w-4 ml-0.5" />
-            </Link>
+            <div className="flex items-center gap-4">
+              <Link
+                href="/series"
+                className="flex items-center text-xs font-semibold text-zinc-400 hover:text-primary transition-colors"
+              >
+                Browse Series
+              </Link>
+              <Link
+                href="/anime?filter=trending"
+                className="flex items-center text-xs font-semibold text-zinc-400 hover:text-primary transition-colors"
+              >
+                See All <ChevronRight className="h-4 w-4 ml-0.5" />
+              </Link>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
             {trendingAnime.map((item) => (
               <AnimeCard
                 key={item.id}
-                externalId={item.externalId}
+                externalId={item.external_id}
                 title={item.title}
                 image={item.image}
                 averageScore={item.averageScore}
@@ -202,7 +210,7 @@ export default async function Home() {
               {popularManga.map((manga) => (
                 <AnimeCard
                   key={manga.id}
-                  externalId={manga.externalId}
+                  externalId={manga.external_id}
                   title={manga.title}
                   image={manga.image}
                   slug={manga.slug}

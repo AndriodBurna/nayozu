@@ -7,36 +7,34 @@ import {
   Play,
   CheckCircle2,
   AlertTriangle,
-  Info,
   Loader2,
   RefreshCw,
   Code,
-  Radio,
-  Tv,
+  Languages,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import MediaPlayer from "@/components/media-player";
 import {
   ANIMESDK_PROVIDERS,
-  type AnimeSdkProviderId,
   type ResolveResponse,
 } from "@/lib/services/animeSdkService";
 
 const SAMPLE_TITLES = [
   "Frieren",
+  "154587", // Sousou no Frieren AniList ID
   "Attack on Titan",
   "Death Note",
   "Jujutsu Kaisen",
   "One Piece",
-  "Sousou no Frieren",
 ];
 
 export default function StreamTesterClient() {
   const [query, setQuery] = useState("Frieren");
   const [activeTitle, setActiveTitle] = useState("Frieren");
   const [provider, setProvider] = useState<string>("auto");
-  const [episodeNum, setEpisodeNum] = useState<number>(1);
+  const [language, setLanguage] = useState<"sub" | "dub">("sub");
+  const [episodeNum] = useState<number>(1);
 
   // Server health state
   const [serverHealth, setServerHealth] = useState<{
@@ -44,6 +42,7 @@ export default function StreamTesterClient() {
     online: boolean;
     providers: string[];
     proxy: boolean;
+    latencyRanking?: Array<{ name: string; ema_seconds: number }>;
   }>({
     loaded: false,
     online: false,
@@ -66,9 +65,14 @@ export default function StreamTesterClient() {
           loaded: true,
           online: Boolean(data.serverOnline),
           providers: Array.isArray(data.providers)
-            ? data.providers.filter((p: { available: boolean }) => p.available).map((p: { id: string }) => p.id)
+            ? data.providers
+                .filter((p: { available: boolean }) => p.available)
+                .map((p: { id: string }) => p.id)
             : [],
           proxy: Boolean(data.proxyEnabled),
+          latencyRanking: Array.isArray(data.latencyRanking)
+            ? data.latencyRanking
+            : undefined,
         });
       } else {
         setServerHealth({ loaded: true, online: false, providers: [], proxy: false });
@@ -83,23 +87,40 @@ export default function StreamTesterClient() {
   }, []);
 
   // Run resolution
-  const handleResolve = async (titleToResolve = query, prov = provider, ep = episodeNum) => {
-    if (!titleToResolve.trim()) return;
+  const handleResolve = async (
+    titleToResolve = query,
+    prov = provider,
+    ep = episodeNum,
+    lang: "sub" | "dub" = language
+  ) => {
+    const trimmed = titleToResolve.trim();
+    if (!trimmed) return;
 
     setResolving(true);
-    setActiveTitle(titleToResolve.trim());
+    setActiveTitle(trimmed);
 
     try {
-      const url = `/api/anime-sdk/resolve?title=${encodeURIComponent(
-        titleToResolve.trim()
-      )}&provider=${encodeURIComponent(prov)}&episode=${ep}&language=sub`;
+      const params = new URLSearchParams({
+        title: trimmed,
+        provider: prov,
+        episode: String(ep),
+        language: lang,
+      });
+      if (/^\d+$/.test(trimmed)) {
+        params.set("anilistId", trimmed);
+      }
+
+      const url = `/api/anime-sdk/resolve?${params.toString()}`;
       const res = await fetch(url, { cache: "no-store" });
       const data = await res.json();
       setResult(data);
     } catch (err) {
       setResult({
         success: false,
-        error: err instanceof Error ? err.message : "Failed to fetch stream resolution.",
+        error:
+          err instanceof Error
+            ? err.message
+            : "Failed to fetch stream resolution.",
       });
     } finally {
       setResolving(false);
@@ -108,7 +129,7 @@ export default function StreamTesterClient() {
 
   // Initial resolution on mount
   useEffect(() => {
-    handleResolve("Frieren", "auto", 1);
+    handleResolve("Frieren", "auto", 1, "sub");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -118,13 +139,19 @@ export default function StreamTesterClient() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b pb-5">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-bold tracking-tight">AnimeSDK Streaming Workbench</h1>
-            <Badge variant="outline" className="border-sky-500/30 bg-sky-500/10 text-sky-400">
-              Experimental
+            <h1 className="text-2xl font-bold tracking-tight">
+              Unified Streaming Workbench
+            </h1>
+            <Badge
+              variant="outline"
+              className="border-sky-500/30 bg-sky-500/10 text-sky-400"
+            >
+              Anivexa + Kuhi Race + AnimeSDK
             </Badge>
           </div>
           <p className="text-sm text-muted-foreground mt-1">
-            Test real-time anime stream resolution, multi-provider auto fallback, and HLS video playback.
+            Test real-time anime stream resolution, Kuhi concurrent fastest-wins
+            provider racing, Sub/Dub audio, and HLS/MP4 video playback.
           </p>
         </div>
 
@@ -134,18 +161,18 @@ export default function StreamTesterClient() {
             serverHealth.online ? (
               <div className="flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-400">
                 <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                SDK Server Online (Port 4000)
+                Unified Server Online ({serverHealth.providers.length - 1} Providers)
               </div>
             ) : (
               <div className="flex items-center gap-1.5 rounded-full border border-destructive/30 bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive">
                 <span className="h-2 w-2 rounded-full bg-destructive" />
-                SDK Server Offline
+                Server Offline
               </div>
             )
           ) : (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Checking SDK server...
+              Checking server...
             </div>
           )}
           <Button
@@ -165,9 +192,12 @@ export default function StreamTesterClient() {
         <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive flex items-start gap-3">
           <Server className="h-5 w-5 shrink-0 mt-0.5" />
           <div>
-            <p className="font-semibold">AnimeSDK Standalone Server is not running</p>
+            <p className="font-semibold">
+              Unified Streaming Server is not running
+            </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              To start the local streaming engine and HLS proxy on port 4000, open a terminal in the project directory and run:
+              To start the local Anivexa + Kuhi Race + AnimeSDK engine and HMAC
+              HLS proxy on port 4000, run:
             </p>
             <pre className="mt-2 rounded bg-muted/80 p-2 font-mono text-xs text-foreground">
               npm run sdk:server
@@ -176,29 +206,67 @@ export default function StreamTesterClient() {
         </div>
       )}
 
-      {/* Search and Provider Controls */}
+      {/* Search, Audio, and Provider Controls */}
       <div className="rounded-xl border bg-card p-4 sm:p-5 shadow-sm space-y-4">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-12 items-center">
           {/* Query input */}
-          <div className="md:col-span-6 relative">
+          <div className="md:col-span-5 relative">
             <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleResolve(query, provider, episodeNum)}
-              placeholder="Enter anime title (e.g. Frieren, Attack on Titan)..."
+              onKeyDown={(e) =>
+                e.key === "Enter" &&
+                handleResolve(query, provider, episodeNum, language)
+              }
+              placeholder="Enter anime title or AniList ID (e.g. Frieren or 154587)..."
               className="w-full rounded-md border border-input bg-background pl-9 pr-3 py-2 text-sm text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
             />
           </div>
 
+          {/* Sub / Dub selector */}
+          <div className="md:col-span-2 flex items-center justify-center">
+            <div className="inline-flex w-full items-center justify-center rounded-md border border-input bg-background p-1 text-xs">
+              <Languages className="h-3.5 w-3.5 text-muted-foreground mr-1.5" />
+              <button
+                type="button"
+                onClick={() => {
+                  setLanguage("sub");
+                  handleResolve(query, provider, episodeNum, "sub");
+                }}
+                className={`flex-1 rounded py-1 text-xs font-medium transition-colors ${
+                  language === "sub"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                SUB
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLanguage("dub");
+                  handleResolve(query, provider, episodeNum, "dub");
+                }}
+                className={`flex-1 rounded py-1 text-xs font-medium transition-colors ${
+                  language === "dub"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                DUB
+              </button>
+            </div>
+          </div>
+
           {/* Provider selector */}
-          <div className="md:col-span-4">
+          <div className="md:col-span-3">
             <select
               value={provider}
               onChange={(e) => {
                 setProvider(e.target.value);
-                handleResolve(query, e.target.value, episodeNum);
+                handleResolve(query, e.target.value, episodeNum, language);
               }}
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
             >
@@ -213,7 +281,7 @@ export default function StreamTesterClient() {
           {/* Resolve trigger button */}
           <div className="md:col-span-2">
             <Button
-              onClick={() => handleResolve(query, provider, episodeNum)}
+              onClick={() => handleResolve(query, provider, episodeNum, language)}
               disabled={resolving || !query.trim()}
               className="w-full text-xs font-semibold"
             >
@@ -240,11 +308,11 @@ export default function StreamTesterClient() {
               key={sample}
               onClick={() => {
                 setQuery(sample);
-                handleResolve(sample, provider, 1);
+                handleResolve(sample, provider, 1, language);
               }}
               className="rounded-full border border-border bg-background px-2.5 py-0.5 text-xs text-foreground hover:bg-muted transition-colors"
             >
-              {sample}
+              {/^\d+$/.test(sample) ? `AniList #${sample}` : sample}
             </button>
           ))}
         </div>
@@ -253,20 +321,26 @@ export default function StreamTesterClient() {
       {/* Player Section: Live Nayozu Media Player with Provider Selector */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold tracking-tight">Interactive Player Preview</h2>
+          <h2 className="text-lg font-semibold tracking-tight">
+            Interactive Player Preview
+          </h2>
           {result?.success && (
-            <Badge variant="outline" className="text-xs text-emerald-400 border-emerald-500/30">
+            <Badge
+              variant="outline"
+              className="text-xs text-emerald-400 border-emerald-500/30"
+            >
               Stream Live: {result.providerName}
             </Badge>
           )}
         </div>
 
         <MediaPlayer
-          key={`${activeTitle}-${provider}`}
-          animeId="test-stream"
-          title={activeTitle}
+          key={`${activeTitle}-${provider}-${language}`}
+          animeId={result?.anilistId ? String(result.anilistId) : /^\d+$/.test(activeTitle) ? activeTitle : "test-stream"}
+          title={result?.mediaTitle || activeTitle}
           episodes={[]}
           initialProvider={provider}
+          initialLanguage={language}
         />
       </div>
 
@@ -275,7 +349,9 @@ export default function StreamTesterClient() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Code className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-semibold">Stream Resolution Diagnostics</h3>
+            <h3 className="text-sm font-semibold">
+              Stream Resolution Diagnostics
+            </h3>
           </div>
           <Button
             variant="ghost"
@@ -292,25 +368,38 @@ export default function StreamTesterClient() {
             {/* Resolution summary grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
               <div className="rounded-lg border p-3 bg-background">
-                <span className="text-muted-foreground block text-[11px]">Resolution Status</span>
-                <span className={`font-semibold ${result.success ? "text-emerald-400" : "text-destructive"}`}>
+                <span className="text-muted-foreground block text-[11px]">
+                  Resolution Status
+                </span>
+                <span
+                  className={`font-semibold ${
+                    result.success ? "text-emerald-400" : "text-destructive"
+                  }`}
+                >
                   {result.success ? "Success (Playable)" : "Failed"}
                 </span>
               </div>
               <div className="rounded-lg border p-3 bg-background">
-                <span className="text-muted-foreground block text-[11px]">Active Provider</span>
+                <span className="text-muted-foreground block text-[11px]">
+                  Winning Provider
+                </span>
                 <span className="font-semibold text-foreground">
                   {result.providerName || result.provider || provider}
                 </span>
               </div>
               <div className="rounded-lg border p-3 bg-background">
-                <span className="text-muted-foreground block text-[11px]">Resolved Title</span>
+                <span className="text-muted-foreground block text-[11px]">
+                  Resolved Title / AniList ID
+                </span>
                 <span className="font-semibold text-foreground truncate block">
                   {result.mediaTitle || activeTitle}
+                  {result.anilistId ? ` (#${result.anilistId})` : ""}
                 </span>
               </div>
               <div className="rounded-lg border p-3 bg-background">
-                <span className="text-muted-foreground block text-[11px]">Episodes Found</span>
+                <span className="text-muted-foreground block text-[11px]">
+                  Episodes Found
+                </span>
                 <span className="font-semibold text-foreground">
                   {result.episodes ? `${result.episodes.length} episodes` : "0"}
                 </span>
@@ -329,7 +418,7 @@ export default function StreamTesterClient() {
             {result.attempts && result.attempts.length > 0 && (
               <div className="space-y-1 rounded-lg border p-3 bg-background">
                 <span className="font-semibold text-foreground block mb-1">
-                  Auto Fallback Chain Evaluation:
+                  Provider Race / Fallback Evaluation:
                 </span>
                 <div className="space-y-1">
                   {result.attempts.map((att, i) => (
@@ -339,10 +428,12 @@ export default function StreamTesterClient() {
                       ) : (
                         <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
                       )}
-                      <span className="font-mono uppercase font-medium">{att.provider}:</span>
+                      <span className="font-mono uppercase font-medium">
+                        {att.provider}:
+                      </span>
                       <span className="text-muted-foreground">
                         {att.status === "success"
-                          ? "Playable HLS stream verified"
+                          ? "Playable stream verified"
                           : att.status === "search_empty"
                           ? "0 search results"
                           : att.status === "no_episodes"
@@ -358,23 +449,28 @@ export default function StreamTesterClient() {
             )}
 
             {/* Subtitle track details */}
-            {result.stream?.streams?.[0]?.subtitles && result.stream.streams[0].subtitles.length > 0 && (
-              <div className="rounded-lg border p-3 bg-background space-y-1">
-                <span className="font-semibold text-foreground block">Verified Subtitles:</span>
-                <div className="flex flex-wrap gap-2">
-                  {result.stream.streams[0].subtitles.map((sub, idx) => (
-                    <Badge key={idx} variant="outline" className="text-[11px]">
-                      {sub.label} ({sub.language})
-                    </Badge>
-                  ))}
+            {result.stream?.streams?.[0]?.subtitles &&
+              result.stream.streams[0].subtitles.length > 0 && (
+                <div className="rounded-lg border p-3 bg-background space-y-1">
+                  <span className="font-semibold text-foreground block">
+                    Verified Subtitles:
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {result.stream.streams[0].subtitles.map((sub, idx) => (
+                      <Badge key={idx} variant="outline" className="text-[11px]">
+                        {sub.label} ({sub.language})
+                      </Badge>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
 
             {/* Raw JSON viewer */}
             {rawInspectorOpen && (
               <div className="space-y-1">
-                <span className="text-muted-foreground text-[11px]">Raw JSON Payload:</span>
+                <span className="text-muted-foreground text-[11px]">
+                  Raw JSON Payload:
+                </span>
                 <pre className="max-h-60 overflow-auto rounded-lg border bg-muted/80 p-3 font-mono text-[11px] text-foreground">
                   {JSON.stringify(result, null, 2)}
                 </pre>
@@ -383,7 +479,8 @@ export default function StreamTesterClient() {
           </div>
         ) : (
           <p className="text-xs text-muted-foreground">
-            No stream resolution initiated yet. Click &quot;Test Stream&quot; above to inspect.
+            No stream resolution initiated yet. Click &quot;Test Stream&quot;
+            above to inspect.
           </p>
         )}
       </div>

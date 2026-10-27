@@ -45,3 +45,12 @@ temp/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Anivexa & Kuhi local runtime artifacts
+Anivexa-API-main/node_modules/
+Anivexa-API-main/core/.cache/
+Anivexa-API-main/*.log
+Anivexa-API-main/.env
+anime-api-main/**/__pycache__/
+anime-api-main/.venv/
+anime-api-main/venv/

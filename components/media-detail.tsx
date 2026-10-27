@@ -8,6 +8,8 @@ import CommentList from "@/components/comment-list";
 import ErrorState from "@/components/error";
 import MediaPlayer from "@/components/media-player";
 import MangaReader from "@/components/manga-reader";
+import MediaLibraryControls from "@/components/media-library-controls";
+import type { LibraryStatus } from "@/lib/actions/libraryActions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AUTH_ENABLED, ENABLE_ANIMESDK } from "@/lib/features";
@@ -35,7 +37,95 @@ export const getMediaItem = cache(async (slug: string, mediaType: MediaType = "a
     .eq("media_type", mediaType)
     .maybeSingle();
   if (error) throw error;
-  return data ? normalizeAnime(data as unknown as AnimeRow) : null;
+  if (data) return normalizeAnime(data as unknown as AnimeRow);
+
+  // Fallback 1: If slug ends with -<external_id>, check public.anime by external_id
+  const idMatch = slug.match(/-(\d+)$/);
+  if (idMatch) {
+    const extId = Number(idMatch[1]);
+    const { data: byExtId } = await supabase
+      .from("anime")
+      .select(WITH_GENRES)
+      .eq("external_id", extId)
+      .eq("media_type", mediaType)
+      .maybeSingle();
+    if (byExtId) return normalizeAnime(byExtId as unknown as AnimeRow);
+
+    // Fallback 2: Fetch live metadata from AniList GraphQL for newly airing calendar titles
+    try {
+      const query = `
+        query ($id: Int, $type: MediaType) {
+          Media(id: $id, type: $type, isAdult: false) {
+            id
+            title { romaji english }
+            description
+            coverImage { extraLarge large }
+            bannerImage
+            episodes
+            chapters
+            volumes
+            status
+            season
+            seasonYear
+            format
+            countryOfOrigin
+            averageScore
+            popularity
+            genres
+            trailer { id site }
+            externalLinks { site url type language }
+          }
+        }
+      `;
+      const res = await fetch("https://graphql.anilist.co", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query,
+          variables: { id: extId, type: mediaType === "manga" ? "MANGA" : "ANIME" },
+        }),
+        next: { revalidate: 3600 },
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const m = json?.data?.Media;
+        if (m) {
+          const row: AnimeRow = {
+            id: `anilist-${m.id}`,
+            external_id: Number(m.id),
+            slug,
+            title_romaji: m.title?.romaji || m.title?.english || "Unknown Title",
+            title_english: m.title?.english ?? null,
+            synopsis: m.description ?? null,
+            cover_image_url: m.coverImage?.extraLarge || m.coverImage?.large || null,
+            banner_image_url: m.bannerImage ?? null,
+            episodes: m.episodes ?? null,
+            chapters: m.chapters ?? null,
+            volumes: m.volumes ?? null,
+            status: m.status ?? null,
+            season: m.season ?? null,
+            season_year: m.seasonYear ?? null,
+            format: m.format ?? null,
+            country: m.countryOfOrigin ?? null,
+            average_score: m.averageScore ?? null,
+            popularity: m.popularity ?? null,
+            media_type: mediaType,
+            external_links: Array.isArray(m.externalLinks) ? m.externalLinks : null,
+            trailer_site: m.trailer?.site ?? null,
+            trailer_id: m.trailer?.id ?? null,
+            anime_genres: Array.isArray(m.genres)
+              ? m.genres.map((g: string) => ({ genres: { name: g } }))
+              : [],
+          };
+          return normalizeAnime(row);
+        }
+      }
+    } catch {
+      // Fall through to null if AniList is unreachable
+    }
+  }
+
+  return null;
 });
 
 export async function generateMediaMetadata(
@@ -85,9 +175,7 @@ export default async function MediaDetail({ slug, mediaType = "anime" }: MediaDe
       .order("popularity", { ascending: false, nullsFirst: false })
       .order("id")
       .limit(6),
-    AUTH_ENABLED
-      ? supabase.auth.getUser()
-      : Promise.resolve({ data: { user: null } }),
+    supabase.auth.getUser(),
   ]);
 
   const more = (((moreRes.data ?? []) as unknown as AnimeRow[])).map(normalizeAnime);
@@ -95,15 +183,27 @@ export default async function MediaDetail({ slug, mediaType = "anime" }: MediaDe
   const user = userRes.data.user;
   const userId = user?.id ?? null;
   let userProgress = 0;
+  let userLibraryStatus: LibraryStatus | null = null;
+  let userIsFavorite = false;
+
   if (user) {
-    const { data: libRow } = await supabase
+    const candidateKeys = isManga
+      ? [`manga:${item.external_id}`, String(item.external_id), `fav:manga:${item.external_id}`]
+      : [String(item.external_id), `fav:anime:${item.external_id}`];
+
+    const { data: libRows } = await supabase
       .from("user_anime_library")
-      .select("progress")
+      .select("anime_id, status, progress")
       .eq("user_id", user.id)
-      .eq("anime_id", String(item.external_id))
-      .maybeSingle();
-    if (libRow && typeof libRow.progress === "number") {
-      userProgress = libRow.progress;
+      .in("anime_id", candidateKeys);
+
+    for (const r of libRows ?? []) {
+      if (String(r.anime_id).startsWith("fav:")) {
+        userIsFavorite = true;
+      } else {
+        userProgress = typeof r.progress === "number" ? r.progress : 0;
+        userLibraryStatus = (r.status as LibraryStatus) || "planned";
+      }
     }
   }
 
@@ -190,10 +290,32 @@ export default async function MediaDetail({ slug, mediaType = "anime" }: MediaDe
 
   return (
     <div className="flex flex-col gap-10">
-      <div>
-        <Link href={parentHref} className="text-sm text-muted-foreground hover:underline">
+      <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+        <Link href={parentHref} className="hover:text-foreground hover:underline transition-colors">
           ← Back to {parentName}
         </Link>
+        {!isManga && (
+          <>
+            <span>·</span>
+            {item.format === "MOVIE" ? (
+              <Link href="/movies" className="hover:text-primary hover:underline transition-colors">
+                Browse Movies
+              </Link>
+            ) : (
+              <Link href="/series" className="hover:text-primary hover:underline transition-colors">
+                Browse Series
+              </Link>
+            )}
+            {item.status === "NOT_YET_RELEASED" && (
+              <>
+                <span>·</span>
+                <Link href="/coming-soon" className="hover:text-primary hover:underline transition-colors">
+                  Coming Soon
+                </Link>
+              </>
+            )}
+          </>
+        )}
       </div>
 
       {item.bannerImage && (
@@ -235,6 +357,14 @@ export default async function MediaDetail({ slug, mediaType = "anime" }: MediaDe
           <div className="space-y-2">
             <h1 className="text-3xl font-bold">{item.title}</h1>
             <p className="text-sm text-muted-foreground">{metaSubtitle}</p>
+            <MediaLibraryControls
+              externalId={item.external_id}
+              mediaType={isManga ? "manga" : "anime"}
+              userId={userId}
+              initialStatus={userLibraryStatus}
+              initialProgress={userProgress}
+              initialFavorite={userIsFavorite}
+            />
           </div>
 
           {item.genres.length > 0 && (
@@ -342,16 +472,33 @@ export default async function MediaDetail({ slug, mediaType = "anime" }: MediaDe
       </div>
 
       {/* In-Site Experience: Video Player for Anime, Chapter Reader for Manga */}
-      {!isManga && (videoEpisodes.length > 0 || ENABLE_ANIMESDK) && (
-        <section className="space-y-4">
-          <MediaPlayer
-            animeId={String(item.external_id)}
-            title={item.title}
-            episodes={videoEpisodes}
-            initialProgress={userProgress}
-            userId={userId}
-          />
+      {!isManga && item.status === "NOT_YET_RELEASED" ? (
+        <section className="rounded-2xl border border-[#1e253d] bg-[#121625] p-6 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge className="bg-primary text-primary-foreground">Upcoming Release</Badge>
+            <span className="text-xs text-zinc-400">
+              {[item.releaseSeason?.toLowerCase(), item.releaseYear].filter(Boolean).join(" ") ||
+                "Release date TBA"}
+            </span>
+          </div>
+          <h2 className="text-base font-semibold text-white">Not Yet Available to Stream</h2>
+          <p className="text-sm text-zinc-400">
+            This title has not been released yet. Check back once episodes or theatrical screenings become available.
+          </p>
         </section>
+      ) : (
+        !isManga &&
+        (videoEpisodes.length > 0 || ENABLE_ANIMESDK) && (
+          <section className="space-y-4">
+            <MediaPlayer
+              animeId={String(item.external_id)}
+              title={item.title}
+              episodes={videoEpisodes}
+              initialProgress={userProgress}
+              userId={userId}
+            />
+          </section>
+        )
       )}
 
       {isManga && mangaChapters.length > 0 && (

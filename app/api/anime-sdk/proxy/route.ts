@@ -5,6 +5,8 @@ import {
   isAllowedProxyHost,
   getSanitizedHost,
   rewriteHlsManifest,
+  decryptFlixCloudManifest,
+  unwrapFlixImageSegment,
   PROXY_SECRET,
 } from "@/lib/services/animeSdkProxy";
 
@@ -64,10 +66,21 @@ export async function GET(request: NextRequest) {
     "Accept-Encoding": "identity",
   };
 
+  let flixKey: string | null = null;
+
   if (hParam) {
     try {
       const parsed = JSON.parse(Buffer.from(hParam, "base64").toString("utf8"));
-      Object.assign(upstreamHeaders, parsed);
+      if (parsed && typeof parsed === "object") {
+        if (typeof parsed.__flixKey === "string") {
+          flixKey = parsed.__flixKey;
+        }
+        for (const [k, v] of Object.entries(parsed)) {
+          if (k !== "__flixKey" && typeof v === "string") {
+            upstreamHeaders[k] = v;
+          }
+        }
+      }
     } catch {
       // Ignored malformed hParam
     }
@@ -106,7 +119,8 @@ export async function GET(request: NextRequest) {
   const cleanUrl = targetUrl.split("?")[0].toLowerCase();
   const isHls =
     ct.toLowerCase().includes("mpegurl") ||
-    cleanUrl.endsWith(".m3u8");
+    cleanUrl.endsWith(".m3u8") ||
+    Boolean(flixKey && cleanUrl.includes("playlist"));
 
   // Determine current proxy base URL
   const origin = new URL(request.url).origin;
@@ -114,9 +128,10 @@ export async function GET(request: NextRequest) {
 
   // 6. Handle HLS manifest rewriting with valid HMAC signatures on all child variants & chunks
   if (isHls) {
-    const rawManifest = await upstream.text();
+    const rawText = await upstream.text();
+    const decryptedManifest = decryptFlixCloudManifest(rawText, flixKey);
     const rewritten = rewriteHlsManifest(
-      rawManifest,
+      decryptedManifest,
       targetUrl,
       proxyBase,
       hParam,
@@ -129,6 +144,36 @@ export async function GET(request: NextRequest) {
         ...CORS_HEADERS,
         "Content-Type": "application/vnd.apple.mpegurl",
         "Cache-Control": "no-cache",
+      },
+    });
+  }
+
+  // 6b. Handle FlixCloud HD-2 PNG/WebP-wrapped MPEG-TS segments
+  const mightBeFlixImageSegment =
+    cleanUrl.endsWith(".png") ||
+    cleanUrl.endsWith(".webp") ||
+    ct.toLowerCase().includes("image/png") ||
+    ct.toLowerCase().includes("image/webp");
+
+  if (mightBeFlixImageSegment && (flixKey || sanitizedHost.includes("flix") || upstreamHeaders.Referer?.includes("flix"))) {
+    const rawBuf = Buffer.from(await upstream.arrayBuffer());
+    const { body, unwrapped } = unwrapFlixImageSegment(rawBuf);
+    if (unwrapped) {
+      return new Response(new Uint8Array(body), {
+        status: upstream.status,
+        headers: {
+          ...CORS_HEADERS,
+          "Content-Type": "video/mp2t",
+          "Content-Length": String(body.length),
+        },
+      });
+    }
+    return new Response(new Uint8Array(rawBuf), {
+      status: upstream.status,
+      headers: {
+        ...CORS_HEADERS,
+        "Content-Type": ct || "application/octet-stream",
+        "Content-Length": String(rawBuf.length),
       },
     });
   }
