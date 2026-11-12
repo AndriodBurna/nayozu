@@ -2,10 +2,9 @@ import { Suspense } from "react";
 import type { Metadata } from "next";
 import { createClient } from "@/lib/supabase/server";
 import { DiscoveryPageSkeleton } from "@/components/loading";
-import { parseWatchRoomPayload } from "./actions";
+import { fetchSharedWatchTogetherRooms } from "@/lib/watch-together/roomService";
 import WatchTogetherClient, {
   type WatchRoomAnimeOption,
-  type WatchRoomChatMessage,
   type WatchRoomItem,
   type WatchTogetherCurrentUser,
 } from "./watch-together-client";
@@ -15,23 +14,6 @@ export const metadata: Metadata = {
   description:
     "Create or join Watch Together rooms on Nayozu with live participant presence, room chat, and host-coordinated playback.",
 };
-
-interface RawProfile {
-  username: string | null;
-  display_name?: string | null;
-  avatar_url: string | null;
-}
-
-interface RawCommentRow {
-  id: string;
-  user_id: string;
-  anime_id: string;
-  parent_comment_id: string | null;
-  body: string;
-  is_hidden: boolean;
-  created_at: string;
-  profiles: RawProfile | RawProfile[] | null;
-}
 
 interface RawAnimeRow {
   external_id: number;
@@ -48,118 +30,30 @@ interface RawAnimeRow {
   official_video_credit: string | null;
 }
 
-function normalizeProfile(raw: RawProfile | RawProfile[] | null, userId: string) {
-  const p = Array.isArray(raw) ? raw[0] : raw;
-  const fallback = `user_${userId.slice(0, 6)}`;
-  return {
-    username: p?.username || fallback,
-    displayName: p?.display_name || p?.username || fallback,
-    avatarUrl: p?.avatar_url ?? null,
-  };
-}
-
-function buildShowcaseRooms(animeOptions: WatchRoomAnimeOption[]): WatchRoomItem[] {
-  const presets = [
-    {
-      id: "showcase-shonen-night",
-      roomTitle: "Shonen Action Première Watch",
-      description:
-        "Community showcase room — test live Realtime presence, episode switching, and the shared watch timer.",
-      episodeNumber: 1,
-      language: "sub" as const,
-      status: "live" as const,
-      hostUsername: "Kaito",
-      maxParticipants: 10,
-    },
-    {
-      id: "showcase-late-night-club",
-      roomTitle: "Late Night Anime Club — Ep 1 Rewatch",
-      description:
-        "Open showcase room for coordinating episode watch-alongs with fellow fans.",
-      episodeNumber: 1,
-      language: "sub" as const,
-      status: "live" as const,
-      hostUsername: "LunaRin",
-      maxParticipants: 12,
-    },
-    {
-      id: "showcase-weekend-dub",
-      roomTitle: "Weekend English Dub Lounge",
-      description:
-        "Relaxed intermission lobby before starting the next episode together.",
-      episodeNumber: 2,
-      language: "dub" as const,
-      status: "intermission" as const,
-      hostUsername: "Mochi",
-      maxParticipants: 8,
-    },
-  ];
-
-  const now = new Date().toISOString();
-  const result: WatchRoomItem[] = [];
-
-  for (let i = 0; i < presets.length; i++) {
-    const anime = animeOptions[i];
-    if (!anime) continue;
-    const preset = presets[i];
-    result.push({
-      id: preset.id,
-      isShowcase: true,
-      roomTitle: preset.roomTitle,
-      description: preset.description,
-      animeExternalId: anime.externalId,
-      animeSlug: anime.slug,
-      animeTitle: anime.title,
-      animeCover: anime.coverImage,
-      episodeNumber: preset.episodeNumber,
-      totalEpisodes: anime.episodes,
-      language: preset.language,
-      status: preset.status,
-      privacy: "public",
-      maxParticipants: preset.maxParticipants,
-      timerSeconds: 0,
-      isPlaying: false,
-      timerUpdatedAt: now,
-      createdAt: now,
-      hostId: `showcase-host-${i}`,
-      host: {
-        username: preset.hostUsername,
-        displayName: preset.hostUsername,
-        avatarUrl: null,
-      },
-      chatMessages: [],
-    });
-  }
-
-  return result;
-}
-
 export default async function WatchTogetherPage() {
-  const supabase = await createClient();
-
   let loadError: string | null = null;
   let currentUser: WatchTogetherCurrentUser | null = null;
 
   try {
-    const [roomRowsRes, animeRes, authRes] = await Promise.all([
-      supabase
-        .from("anime_comments")
-        .select(
-          `
-          id,
-          user_id,
-          anime_id,
-          parent_comment_id,
-          body,
-          is_hidden,
-          created_at,
-          profiles ( username, display_name, avatar_url )
-        `
-        )
-        .eq("anime_id", "watch_room")
-        .eq("is_hidden", false)
-        .order("created_at", { ascending: false })
-        .limit(100),
+    const supabase = await createClient();
+    const authRes = await supabase.auth.getUser();
+    const user = authRes.data?.user ?? null;
+
+    const [sharedRoomsRes, animeRes, profileRes] = await Promise.all([
+      fetchSharedWatchTogetherRooms(supabase, {
+        currentUserId: user?.id ?? null,
+      }).catch((err: unknown) => {
+        loadError =
+          err instanceof Error
+            ? err.message
+            : "Failed to load Watch Together rooms.";
+        return {
+          lobbyRooms: [],
+          drawerRooms: [],
+          blockedSet: new Set<string>(),
+          hostActivityMap: new Map(),
+        };
+      }),
 
       supabase
         .from("anime")
@@ -171,21 +65,17 @@ export default async function WatchTogetherPage() {
         .order("popularity", { ascending: false, nullsFirst: false })
         .limit(60),
 
-      supabase.auth.getUser(),
+      user
+        ? supabase
+            .from("profiles")
+            .select("username, display_name, avatar_url, profile_visibility")
+            .eq("id", user.id)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
     ]);
 
-    if (roomRowsRes.error) {
-      loadError = roomRowsRes.error.message;
-    }
-
-    const user = authRes.data?.user;
     if (user) {
-      const { data: profileData } = await supabase
-        .from("profiles")
-        .select("username, display_name, avatar_url")
-        .eq("id", user.id)
-        .maybeSingle();
-
+      const profileData = profileRes.data;
       const fallbackUsername =
         profileData?.username ||
         (user.user_metadata?.username as string | undefined) ||
@@ -195,7 +85,12 @@ export default async function WatchTogetherPage() {
       currentUser = {
         id: user.id,
         username: fallbackUsername,
+        displayName:
+          profileData?.display_name ||
+          (user.user_metadata?.display_name as string | undefined) ||
+          fallbackUsername,
         avatarUrl: profileData?.avatar_url ?? null,
+        isPublicProfile: profileData?.profile_visibility === "public",
       };
     }
 
@@ -214,73 +109,16 @@ export default async function WatchTogetherPage() {
       officialVideoCredit: a.official_video_credit ?? null,
     }));
 
-    const rawRows = (roomRowsRes.data ?? []) as unknown as RawCommentRow[];
-    const chatByRoom = new Map<string, WatchRoomChatMessage[]>();
-    const topLevelRoomRows: RawCommentRow[] = [];
-
-    for (const row of rawRows) {
-      if (row.parent_comment_id) {
-        const author = normalizeProfile(row.profiles, row.user_id);
-        const list = chatByRoom.get(row.parent_comment_id) ?? [];
-        list.push({
-          id: row.id,
-          body: row.body,
-          createdAt: row.created_at,
-          author: {
-            username: author.username,
-            avatarUrl: author.avatarUrl,
-          },
-        });
-        chatByRoom.set(row.parent_comment_id, list);
-      } else {
-        topLevelRoomRows.push(row);
-      }
-    }
-
-    const persistedRooms: WatchRoomItem[] = [];
-    for (const row of topLevelRoomRows) {
-      const parsed = await parseWatchRoomPayload(row.body);
-      if (!parsed || parsed.status === "ended") continue;
-      const host = normalizeProfile(row.profiles, row.user_id);
-      const chatMessages = (chatByRoom.get(row.id) ?? []).sort(
-        (a, b) =>
-          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-      );
-
-      persistedRooms.push({
-        id: row.id,
-        isShowcase: false,
-        roomTitle: parsed.roomTitle,
-        description: parsed.description,
-        animeExternalId: parsed.animeExternalId,
-        animeSlug: parsed.animeSlug,
-        animeTitle: parsed.animeTitle,
-        animeCover: parsed.animeCover,
-        episodeNumber: parsed.episodeNumber,
-        totalEpisodes: parsed.totalEpisodes,
-        language: parsed.language,
-        status: parsed.status,
-        privacy: parsed.privacy,
-        maxParticipants: parsed.maxParticipants,
-        timerSeconds: parsed.timerSeconds,
-        isPlaying: parsed.isPlaying,
-        timerUpdatedAt: parsed.timerUpdatedAt,
-        createdAt: row.created_at,
-        hostId: row.user_id,
-        host,
-        chatMessages,
-      });
-    }
-
-    const showcaseRooms = buildShowcaseRooms(animeOptions);
-    const allRooms = [...persistedRooms, ...showcaseRooms];
+    const initialRooms: WatchRoomItem[] = sharedRoomsRes.lobbyRooms;
+    const blockedUserIds = Array.from(sharedRoomsRes.blockedSet);
 
     return (
       <Suspense fallback={<DiscoveryPageSkeleton />}>
         <WatchTogetherClient
-          initialRooms={allRooms}
+          initialRooms={initialRooms}
           animeOptions={animeOptions}
           currentUser={currentUser}
+          blockedUserIds={blockedUserIds}
           loadError={loadError}
         />
       </Suspense>
@@ -294,6 +132,7 @@ export default async function WatchTogetherPage() {
           initialRooms={[]}
           animeOptions={[]}
           currentUser={null}
+          blockedUserIds={[]}
           loadError={message}
         />
       </Suspense>

@@ -32,6 +32,14 @@ export interface ProfileSettingsData {
   displayName: string;
   avatarUrl: string;
   bio: string;
+  profileVisibility?: "public" | "private";
+  blockedUsers?: Array<{
+    id: string;
+    username: string;
+    displayName: string | null;
+    avatarUrl: string | null;
+    blockedAt: string;
+  }>;
   createdAt: string | null;
   updatedAt: string | null;
   lastSignInAt: string | null;
@@ -48,6 +56,7 @@ export interface SettingsActionResult {
   success: boolean;
   error?: string;
   message?: string;
+  avatarUrl?: string;
   preferences?: UserPreferences;
   profile?: {
     username: string;
@@ -79,6 +88,14 @@ const DEFAULT_PREFERENCES: UserPreferences = {
   notifyEpisodeReleases: true,
   notifyCommunityReplies: true,
   notifyWatchTogetherInvites: true,
+};
+
+const MAX_AVATAR_BYTES = 2 * 1024 * 1024; // 2 MB
+const ALLOWED_AVATAR_MIME_TYPES: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
 };
 
 function sanitizePreferences(raw: unknown): UserPreferences {
@@ -132,6 +149,172 @@ function isValidAvatarUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Inspect the binary magic bytes of an uploaded file buffer to verify it is a genuine
+ * JPEG, PNG, GIF, or WebP image and not a disguised executable, HTML, or SVG XSS payload.
+ */
+function verifyImageMagicBytes(bytes: Uint8Array, mimeType: string): boolean {
+  if (bytes.length < 12) return false;
+
+  if (mimeType === "image/jpeg") {
+    return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  }
+
+  if (mimeType === "image/png") {
+    return (
+      bytes[0] === 0x89 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x4e &&
+      bytes[3] === 0x47 &&
+      bytes[4] === 0x0d &&
+      bytes[5] === 0x0a &&
+      bytes[6] === 0x1a &&
+      bytes[7] === 0x0a
+    );
+  }
+
+  if (mimeType === "image/gif") {
+    // GIF87a or GIF89a
+    return (
+      bytes[0] === 0x47 &&
+      bytes[1] === 0x49 &&
+      bytes[2] === 0x46 &&
+      bytes[3] === 0x38 &&
+      (bytes[4] === 0x37 || bytes[4] === 0x39) &&
+      bytes[5] === 0x61
+    );
+  }
+
+  if (mimeType === "image/webp") {
+    // RIFF....WEBP
+    return (
+      bytes[0] === 0x52 &&
+      bytes[1] === 0x49 &&
+      bytes[2] === 0x46 &&
+      bytes[3] === 0x46 &&
+      bytes[8] === 0x57 &&
+      bytes[9] === 0x45 &&
+      bytes[10] === 0x42 &&
+      bytes[11] === 0x50
+    );
+  }
+
+  return false;
+}
+
+/**
+ * Upload an avatar image file to the user's own folder (`<user.id>/...`) in the
+ * Supabase Storage `avatars` bucket and persist the public URL to `public.profiles`.
+ */
+export async function uploadAvatarAction(
+  formData: FormData
+): Promise<SettingsActionResult> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return {
+      success: false,
+      error: "You must be signed in to upload an avatar.",
+    };
+  }
+
+  const rawFile = formData.get("avatar");
+  if (!rawFile || !(rawFile instanceof File)) {
+    return {
+      success: false,
+      error: "Please select an image file to upload.",
+    };
+  }
+
+  if (rawFile.size <= 0) {
+    return {
+      success: false,
+      error: "Selected file is empty.",
+    };
+  }
+
+  if (rawFile.size > MAX_AVATAR_BYTES) {
+    return {
+      success: false,
+      error: "Avatar image must be 2 MB or smaller.",
+    };
+  }
+
+  const ext = ALLOWED_AVATAR_MIME_TYPES[rawFile.type];
+  if (!ext) {
+    return {
+      success: false,
+      error:
+        "Invalid file format. Only JPEG, PNG, WebP, and GIF images are allowed.",
+    };
+  }
+
+  const arrayBuffer = await rawFile.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+  if (!verifyImageMagicBytes(bytes, rawFile.type)) {
+    return {
+      success: false,
+      error:
+        "File content does not match a valid image signature. Upload rejected for security.",
+    };
+  }
+
+  const storagePath = `${user.id}/avatar-${Date.now()}.${ext}`;
+  const { error: uploadError } = await supabase.storage
+    .from("avatars")
+    .upload(storagePath, bytes, {
+      contentType: rawFile.type,
+      upsert: true,
+    });
+
+  if (uploadError) {
+    return {
+      success: false,
+      error: uploadError.message || "Failed to upload avatar image.",
+    };
+  }
+
+  const {
+    data: { publicUrl },
+  } = supabase.storage.from("avatars").getPublicUrl(storagePath);
+
+  const now = new Date().toISOString();
+  const { error: profileErr } = await supabase
+    .from("profiles")
+    .update({
+      avatar_url: publicUrl,
+      updated_at: now,
+    })
+    .eq("id", user.id);
+
+  if (profileErr) {
+    return {
+      success: false,
+      error: profileErr.message || "Failed to update profile avatar URL.",
+    };
+  }
+
+  await supabase.auth.updateUser({
+    data: {
+      avatar_url: publicUrl,
+    },
+  });
+
+  revalidatePath("/settings");
+  revalidatePath("/profile");
+  revalidatePath("/community");
+
+  return {
+    success: true,
+    avatarUrl: publicUrl,
+    message: "Avatar uploaded and saved to your profile.",
+  };
 }
 
 /**
@@ -192,11 +375,12 @@ export async function updateProfileSettingsAction(input: {
     };
   }
 
-  // Check if username is already claimed by another user
+  // Check if username is already claimed by another user (escape _ so ILIKE treats it literally)
+  const escapedUsername = cleanUsername.replace(/[%_\\]/g, "\\$&");
   const { data: existingUsername } = await supabase
     .from("profiles")
     .select("id")
-    .eq("username", cleanUsername)
+    .ilike("username", escapedUsername)
     .neq("id", user.id)
     .maybeSingle();
 
@@ -221,6 +405,18 @@ export async function updateProfileSettingsAction(input: {
   );
 
   if (upsertError) {
+    // Handle atomic unique index violation (e.g. concurrent username update race)
+    if (
+      upsertError.code === "23505" ||
+      upsertError.message?.toLowerCase().includes("idx_profiles_username_lower") ||
+      upsertError.message?.toLowerCase().includes("profiles_username_key")
+    ) {
+      return {
+        success: false,
+        error: `The username @${cleanUsername} is already taken. Please choose another.`,
+      };
+    }
+
     return {
       success: false,
       error: upsertError.message || "Failed to update profile in database.",
@@ -300,6 +496,47 @@ export async function updateUserPreferencesAction(
   };
 }
 
+export async function updateProfileVisibilityAction(input: {
+  visibility: "public" | "private";
+}): Promise<SettingsActionResult> {
+  const visibility = input.visibility === "private" ? "private" : "public";
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return {
+      success: false,
+      error: "You must be signed in to update profile visibility.",
+    };
+  }
+
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from("profiles")
+    .update({
+      profile_visibility: visibility,
+      updated_at: now,
+    })
+    .eq("id", user.id);
+
+  if (error) {
+    return {
+      success: false,
+      error: "Failed to update profile visibility.",
+    };
+  }
+
+  revalidatePath("/settings");
+  revalidatePath("/profile");
+  return {
+    success: true,
+    message: `Profile visibility set to ${visibility === "public" ? "Public" : "Private"}.`,
+  };
+}
+
 /**
  * Update the authenticated user's password via Supabase Auth.
  */
@@ -321,6 +558,13 @@ export async function updatePasswordAction(input: {
     return {
       success: false,
       error: "New password cannot exceed 128 characters.",
+    };
+  }
+
+  if (!/[A-Za-z]/.test(pwd) || !/\d/.test(pwd)) {
+    return {
+      success: false,
+      error: "New password must contain at least one letter and one number.",
     };
   }
 

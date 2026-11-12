@@ -1,12 +1,11 @@
 "use client";
 
-import { useState, useMemo, useTransition } from "react";
+import { useEffect, useState, useMemo, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
 import {
   MessageSquare,
-  Heart,
   Search,
   Plus,
   Sparkles,
@@ -21,6 +20,10 @@ import {
   Filter,
   Flame,
   Info,
+  Edit3,
+  Trash2,
+  Flag,
+  ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -32,8 +35,27 @@ import {
   createCommunityPostAction,
   createCommunityReplyAction,
 } from "./actions";
+import {
+  updateDiscussionAction,
+  deleteDiscussionAction,
+  updateDiscussionReplyAction,
+  deleteDiscussionReplyAction,
+  updateMediaCommentAction,
+  deleteMediaCommentAction,
+  deleteReviewAction,
+  upsertReviewAction,
+  type ReactionSummary,
+  type ReactionTargetType,
+  type ReportContentType,
+} from "@/lib/actions/communityActions";
+import {
+  ReactionBar,
+  ReportContentModal,
+  BlockUserButton,
+} from "@/components/community-action-modals";
 
 export interface CommunityAuthor {
+  id?: string;
   username: string;
   displayName?: string | null;
   avatarUrl: string | null;
@@ -41,14 +63,21 @@ export interface CommunityAuthor {
 
 export interface CommunityReplyItem {
   id: string;
+  userId?: string;
   body: string;
   createdAt: string;
   author: CommunityAuthor;
+  targetType?: "discussion_reply" | "comment";
+  reactions?: ReactionSummary;
 }
 
 export interface CommunityPostItem {
   id: string;
+  rawId?: string;
+  userId?: string;
   kind: "discussion" | "question" | "review";
+  sourceTable?: "discussions" | "anime_comments" | "anime_reviews";
+  targetType?: ReactionTargetType;
   animeId: string;
   mediaTitle: string | null;
   mediaSlug: string | null;
@@ -56,8 +85,10 @@ export interface CommunityPostItem {
   title: string | null;
   body: string;
   isSpoiler: boolean;
+  isLocked?: boolean;
   createdAt: string;
   author: CommunityAuthor;
+  reactions?: ReactionSummary;
   replies: CommunityReplyItem[];
   isSample?: boolean;
 }
@@ -78,10 +109,18 @@ interface CommunityClientProps {
     avatarUrl: string | null;
   } | null;
   loadError?: string | null;
+  initialDiscussionId?: string | null;
 }
 
-type TabKey = "all" | "following" | "reviews" | "questions";
-type SortKey = "latest" | "discussed";
+type TabKey = "all" | "reviews" | "questions";
+type SortKey = "latest" | "oldest" | "discussed" | "reacted";
+
+const DEFAULT_REACTIONS: ReactionSummary = {
+  like: 0,
+  helpful: 0,
+  fire: 0,
+  userReaction: null,
+};
 
 const SAMPLE_TOPICS: CommunityPostItem[] = [
   {
@@ -104,7 +143,7 @@ const SAMPLE_TOPICS: CommunityPostItem[] = [
     replies: [
       {
         id: "sample-reply-1",
-        body: "Frieren's dirección and soundtrack integration made every quiet scene feel cinematic.",
+        body: "Frieren's direction and soundtrack integration made every quiet scene feel cinematic.",
         createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
         author: {
           username: "Kaito",
@@ -136,26 +175,6 @@ const SAMPLE_TOPICS: CommunityPostItem[] = [
     replies: [],
     isSample: true,
   },
-  {
-    id: "sample-topic-3",
-    kind: "discussion",
-    animeId: "community",
-    mediaTitle: "General Community",
-    mediaSlug: null,
-    mediaType: null,
-    title: "Manga vs. Anime — When do you switch to reading the source material?",
-    body: "Do you wait for the next anime season to air, or jump straight into the manga right after a cliffhanger finale?",
-    isSpoiler: false,
-    createdAt: new Date(Date.now() - 18 * 60 * 60 * 1000).toISOString(),
-    author: {
-      username: "ZenitsuFan",
-      displayName: "ZenitsuFan",
-      avatarUrl:
-        "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&auto=format&fit=crop&q=80",
-    },
-    replies: [],
-    isSample: true,
-  },
 ];
 
 export default function CommunityClient({
@@ -163,15 +182,20 @@ export default function CommunityClient({
   mediaOptions,
   currentUser,
   loadError,
+  initialDiscussionId = null,
 }: CommunityClientProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  const [highlightedPostId, setHighlightedPostId] = useState<string | null>(
+    initialDiscussionId
+  );
 
   // Filter & Sort state
   const [activeTab, setActiveTab] = useState<TabKey>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortKey>("latest");
   const [selectedMediaFilter, setSelectedMediaFilter] = useState<string>("all");
+  const [visibleCount, setVisibleCount] = useState(12);
 
   // Create Post Form state
   const [composerOpen, setComposerOpen] = useState(false);
@@ -179,30 +203,37 @@ export default function CommunityClient({
   const [selectedAnimeId, setSelectedAnimeId] = useState<string>("community");
   const [postTitle, setPostTitle] = useState("");
   const [postBody, setPostBody] = useState("");
+  const [reviewScore, setReviewScore] = useState<number | "">(9);
   const [isSpoiler, setIsSpoiler] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
 
-  // Spoiler & Reply UI state
+  // Edit Post / Reply state
+  const [editingPostId, setEditingPostId] = useState<string | null>(null);
+  const [editPostTitle, setEditPostTitle] = useState("");
+  const [editPostBody, setEditPostBody] = useState("");
+  const [editingReplyId, setEditingReplyId] = useState<string | null>(null);
+  const [editReplyBody, setEditReplyBody] = useState("");
+
+  // Spoiler, Reply & Report UI state
   const [revealedSpoilers, setRevealedSpoilers] = useState<Record<string, boolean>>({});
   const [expandedComments, setExpandedComments] = useState<Record<string, boolean>>({});
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
   const [replyError, setReplyError] = useState<Record<string, string>>({});
   const [replyingId, setReplyingId] = useState<string | null>(null);
+  const [reportTarget, setReportTarget] = useState<{
+    contentType: ReportContentType;
+    contentId: string;
+    label: string;
+  } | null>(null);
 
-  // Combine database posts with sample showcase topics when database has no posts yet
   const usingSampleFallback = initialPosts.length === 0 && !loadError;
   const allPosts = useMemo(
     () => (initialPosts.length > 0 ? initialPosts : SAMPLE_TOPICS),
     [initialPosts]
   );
 
-  // Filtered & sorted posts
   const filteredPosts = useMemo(() => {
-    if (activeTab === "following") {
-      return [];
-    }
-
     const q = searchQuery.trim().toLowerCase();
 
     return allPosts
@@ -223,9 +254,52 @@ export default function CommunityClient({
           const diff = b.replies.length - a.replies.length;
           if (diff !== 0) return diff;
         }
+        if (sortBy === "reacted") {
+          const ra =
+            (a.reactions?.like ?? 0) +
+            (a.reactions?.helpful ?? 0) +
+            (a.reactions?.fire ?? 0);
+          const rb =
+            (b.reactions?.like ?? 0) +
+            (b.reactions?.helpful ?? 0) +
+            (b.reactions?.fire ?? 0);
+          if (rb !== ra) return rb - ra;
+        }
+        if (sortBy === "oldest") {
+          return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        }
         return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
       });
   }, [allPosts, activeTab, searchQuery, sortBy, selectedMediaFilter]);
+
+  const paginatedPosts = filteredPosts.slice(0, visibleCount);
+
+  useEffect(() => {
+    const targetId = initialDiscussionId;
+    if (!targetId) return;
+
+    setHighlightedPostId(targetId);
+    setActiveTab("all");
+    setSelectedMediaFilter("all");
+    setSearchQuery("");
+    setExpandedComments((prev) => ({ ...prev, [targetId]: true }));
+
+    const idx = allPosts.findIndex(
+      (p) => p.id === targetId || p.rawId === targetId
+    );
+    if (idx >= 0 && idx + 1 > visibleCount) {
+      setVisibleCount(idx + 4);
+    }
+
+    const timer = window.setTimeout(() => {
+      const el = document.getElementById(`discussion-${targetId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }, 100);
+
+    return () => window.clearTimeout(timer);
+  }, [initialDiscussionId, allPosts, visibleCount]);
 
   const handleCreatePost = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -238,6 +312,7 @@ export default function CommunityClient({
         animeId: selectedAnimeId,
         title: postTitle,
         body: postBody,
+        score: postType === "review" && reviewScore !== "" ? Number(reviewScore) : null,
         isSpoiler,
       });
 
@@ -249,8 +324,69 @@ export default function CommunityClient({
       setPostTitle("");
       setPostBody("");
       setIsSpoiler(false);
-      setFormSuccess("Your post was saved to the database.");
+      setFormSuccess("Your post was published to the community.");
       setComposerOpen(false);
+      router.refresh();
+    });
+  };
+
+  const handleSavePostEdit = (post: CommunityPostItem) => {
+    const cleanTitle = editPostTitle.trim();
+    const cleanBody = editPostBody.trim();
+    if (!cleanBody) return;
+
+    startTransition(async () => {
+      let res: { success: boolean; error?: string };
+      if (post.sourceTable === "discussions") {
+        res = await updateDiscussionAction({
+          discussionId: post.rawId || post.id,
+          title: cleanTitle || post.title || "Community Discussion",
+          body: cleanBody,
+        });
+      } else if (post.sourceTable === "anime_reviews") {
+        res = await upsertReviewAction({
+          externalId: post.animeId,
+          mediaType: post.mediaType || "anime",
+          title: cleanTitle || null,
+          body: cleanBody,
+        });
+      } else {
+        res = await updateMediaCommentAction({
+          commentId: post.rawId || post.id,
+          body: cleanTitle ? `${cleanTitle}\n\n${cleanBody}` : cleanBody,
+        });
+      }
+
+      if (!res.success) {
+        setFormError(res.error || "Failed to update post.");
+        return;
+      }
+      setEditingPostId(null);
+      router.refresh();
+    });
+  };
+
+  const handleDeletePost = (post: CommunityPostItem) => {
+    startTransition(async () => {
+      let res: { success: boolean; error?: string };
+      if (post.sourceTable === "discussions") {
+        res = await deleteDiscussionAction({
+          discussionId: post.rawId || post.id,
+        });
+      } else if (post.sourceTable === "anime_reviews") {
+        res = await deleteReviewAction({
+          reviewId: post.rawId || post.id.replace(/^review-/, ""),
+        });
+      } else {
+        res = await deleteMediaCommentAction({
+          commentId: post.rawId || post.id,
+        });
+      }
+
+      if (!res.success) {
+        setFormError(res.error || "Failed to delete post.");
+        return;
+      }
       router.refresh();
     });
   };
@@ -264,9 +400,10 @@ export default function CommunityClient({
 
     startTransition(async () => {
       const res = await createCommunityReplyAction({
-        parentCommentId: post.id,
+        parentCommentId: post.rawId || post.id,
         animeId: post.animeId,
         body: draft,
+        isDiscussionTable: post.sourceTable === "discussions",
       });
 
       setReplyingId(null);
@@ -284,9 +421,44 @@ export default function CommunityClient({
     });
   };
 
+  const handleSaveReplyEdit = (reply: CommunityReplyItem) => {
+    const trimmed = editReplyBody.trim();
+    if (!trimmed) return;
+
+    startTransition(async () => {
+      const res =
+        reply.targetType === "discussion_reply"
+          ? await updateDiscussionReplyAction({
+              replyId: reply.id,
+              body: trimmed,
+            })
+          : await updateMediaCommentAction({
+              commentId: reply.id,
+              body: trimmed,
+            });
+
+      if (res.success) {
+        setEditingReplyId(null);
+        router.refresh();
+      }
+    });
+  };
+
+  const handleDeleteReply = (reply: CommunityReplyItem) => {
+    startTransition(async () => {
+      const res =
+        reply.targetType === "discussion_reply"
+          ? await deleteDiscussionReplyAction({ replyId: reply.id })
+          : await deleteMediaCommentAction({ commentId: reply.id });
+
+      if (res.success) {
+        router.refresh();
+      }
+    });
+  };
+
   const tabs: Array<{ id: TabKey; label: string; icon: typeof MessageSquare }> = [
     { id: "all", label: "All Discussions", icon: MessageSquare },
-    { id: "following", label: "Following", icon: Users },
     { id: "reviews", label: "Reviews", icon: BookOpen },
     { id: "questions", label: "Questions", icon: HelpCircle },
   ];
@@ -327,7 +499,7 @@ export default function CommunityClient({
                 asChild
                 className="h-10 rounded-xl bg-primary px-5 text-xs font-semibold text-primary-foreground shadow-lg shadow-primary/25 hover:brightness-110"
               >
-                <Link href="/auth/login">
+                <Link href="/login">
                   <Lock className="mr-1.5 h-3.5 w-3.5" />
                   Sign in to Post
                 </Link>
@@ -351,11 +523,11 @@ export default function CommunityClient({
         </div>
       )}
 
-      {/* 2. Create Post Composer (Authenticated Users) or Sign-In Prompt */}
+      {/* 2. Create Post Composer */}
       {currentUser ? (
         composerOpen && (
           <section className="rounded-2xl border border-[#1e253d] bg-[#121625] p-5 space-y-4">
-            <div className="flex items-center justify-between border-b border-white/5 pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/5 pb-3">
               <div className="flex items-center gap-2.5">
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/20 text-xs font-bold text-primary">
                   {currentUser.username.slice(0, 2).toUpperCase()}
@@ -370,7 +542,6 @@ export default function CommunityClient({
                 </div>
               </div>
 
-              {/* Post Type Selector */}
               <div className="inline-flex rounded-xl border border-[#232a42] bg-[#0b0e17] p-1 text-xs">
                 {(
                   [
@@ -430,7 +601,7 @@ export default function CommunityClient({
 
                 <div className="space-y-1.5">
                   <Label htmlFor="post-title" className="text-xs text-zinc-300">
-                    Headline / Title (Optional)
+                    Headline / Title {postType === "discussion" ? "(Required)" : "(Optional)"}
                   </Label>
                   <Input
                     id="post-title"
@@ -447,6 +618,29 @@ export default function CommunityClient({
                   />
                 </div>
               </div>
+
+              {postType === "review" && (
+                <div className="flex items-center gap-3">
+                  <Label htmlFor="post-score" className="text-xs text-zinc-300">
+                    Rating Score (1–10):
+                  </Label>
+                  <select
+                    id="post-score"
+                    value={reviewScore}
+                    onChange={(e) =>
+                      setReviewScore(e.target.value === "" ? "" : Number(e.target.value))
+                    }
+                    className="h-9 rounded-xl border border-[#232a42] bg-[#0b0e17] px-3 text-xs font-bold text-amber-300"
+                  >
+                    <option value="">No rating</option>
+                    {[10, 9, 8, 7, 6, 5, 4, 3, 2, 1].map((n) => (
+                      <option key={n} value={n}>
+                        {n} / 10
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div className="space-y-1.5">
                 <Label htmlFor="post-body" className="text-xs text-zinc-300">
@@ -525,20 +719,20 @@ export default function CommunityClient({
                 Join the conversation on Nayozu
               </p>
               <p className="text-[11px] text-zinc-400">
-                Sign in to start discussions, ask questions, and post anime or manga reviews.
+                Sign in to start discussions, ask questions, react, and post anime or manga reviews.
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <Button asChild variant="outline" size="sm" className="h-8 rounded-xl text-xs">
-              <Link href="/auth/login">Sign in</Link>
+              <Link href="/login">Sign in</Link>
             </Button>
             <Button
               asChild
               size="sm"
               className="h-8 rounded-xl bg-primary text-xs font-semibold text-primary-foreground"
             >
-              <Link href="/auth/sign-up">Get started</Link>
+              <Link href="/register">Get started</Link>
             </Button>
           </div>
         </div>
@@ -546,7 +740,6 @@ export default function CommunityClient({
 
       {/* 3. Tabs, Search, and Sort Controls */}
       <div className="flex flex-col gap-4 border-b border-[#1a2034] pb-4 lg:flex-row lg:items-center lg:justify-between">
-        {/* Category Tabs */}
         <div className="flex flex-wrap items-center gap-1.5">
           {tabs.map((tab) => {
             const Icon = tab.icon;
@@ -570,7 +763,6 @@ export default function CommunityClient({
           })}
         </div>
 
-        {/* Search & Filters */}
         <div className="flex flex-wrap items-center gap-2.5">
           <div className="relative flex-1 sm:w-60 sm:flex-initial">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400" />
@@ -608,12 +800,14 @@ export default function CommunityClient({
             className="h-9 rounded-xl border border-[#1f263c] bg-[#101422] px-3 text-xs text-zinc-200 focus:border-primary focus:outline-none"
           >
             <option value="latest">Latest First</option>
+            <option value="oldest">Oldest First</option>
             <option value="discussed">Most Discussed</option>
+            <option value="reacted">Most Reacted</option>
           </select>
         </div>
       </div>
 
-      {/* 4. Error Banner if Supabase Query Failed */}
+      {/* 4. Error Banner */}
       {loadError && (
         <div className="flex items-center gap-3 rounded-2xl border border-destructive/30 bg-destructive/10 p-4 text-xs text-destructive">
           <AlertCircle className="h-5 w-5 shrink-0" />
@@ -624,8 +818,7 @@ export default function CommunityClient({
         </div>
       )}
 
-      {/* Sample Fallback Notice */}
-      {usingSampleFallback && activeTab !== "following" && (
+      {usingSampleFallback && (
         <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/20 bg-primary/5 px-4 py-2.5 text-xs text-zinc-300">
           <div className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-primary shrink-0" />
@@ -637,28 +830,7 @@ export default function CommunityClient({
       )}
 
       {/* 5. Main Content Area */}
-      {activeTab === "following" ? (
-        /* Honest Unimplemented State for Following Graph */
-        <div className="flex flex-col items-center justify-center rounded-2xl border border-[#1c2236] bg-[#121624] p-10 text-center space-y-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/15 text-primary">
-            <Users className="h-6 w-6" />
-          </div>
-          <h3 className="text-base font-bold text-white">
-            User Following Feed Not Yet Enabled
-          </h3>
-          <p className="max-w-md text-xs text-zinc-400 leading-relaxed">
-            The current Supabase database schema includes <code className="text-zinc-300">profiles</code>, <code className="text-zinc-300">anime_comments</code>, and <code className="text-zinc-300">anime_reviews</code>, but does not yet include a user-follows relationship table. Switch to <strong>All Discussions</strong>, <strong>Reviews</strong>, or <strong>Questions</strong> to browse the active community feed.
-          </p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setActiveTab("all")}
-            className="mt-2 rounded-xl text-xs"
-          >
-            Browse All Discussions
-          </Button>
-        </div>
-      ) : filteredPosts.length === 0 ? (
+      {filteredPosts.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-2xl border border-[#1c2236] bg-[#121624] p-12 text-center space-y-3">
           <MessageSquare className="h-8 w-8 text-zinc-500" />
           <h3 className="text-base font-bold text-white">No matching posts found</h3>
@@ -682,39 +854,70 @@ export default function CommunityClient({
         </div>
       ) : (
         <div className="flex flex-col gap-4">
-          {filteredPosts.map((post) => {
+          {paginatedPosts.map((post) => {
             const isSpoilerHidden = post.isSpoiler && !revealedSpoilers[post.id];
             const isExpanded = Boolean(expandedComments[post.id]);
-            const canReplyInDb = !post.isSample && post.kind !== "review";
+            const canReplyInDb =
+              !post.isSample && post.kind !== "review" && !post.isLocked;
+            const isOwner = Boolean(
+              currentUser &&
+                (post.userId === currentUser.id ||
+                  post.author.username === currentUser.username)
+            );
+            const isEditingPost = editingPostId === post.id;
+            const targetId = post.rawId || post.id.replace(/^review-/, "");
+            const targetType: ReactionTargetType =
+              post.targetType ??
+              (post.kind === "review" ? "review" : "discussion");
 
             return (
               <article
+                id={`discussion-${post.id}`}
                 key={post.id}
-                className="rounded-2xl border border-[#1c2236] bg-[#121624] p-5 transition-colors hover:border-[#26304d]"
+                className={cn(
+                  "rounded-2xl border bg-[#121624] p-5 transition-colors hover:border-[#26304d]",
+                  highlightedPostId === post.id
+                    ? "border-primary/70 ring-1 ring-primary/30"
+                    : "border-[#1c2236]"
+                )}
               >
                 {/* Author & Topic Header */}
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-3">
-                    {post.author.avatarUrl ? (
-                      <img
-                        src={post.author.avatarUrl}
-                        alt={post.author.username}
-                        className="h-10 w-10 rounded-full object-cover border border-white/10"
-                      />
-                    ) : (
-                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/20 text-xs font-bold text-primary">
-                        {post.author.username.slice(0, 2).toUpperCase()}
-                      </div>
-                    )}
+                    <Link
+                      href={`/u/${encodeURIComponent(post.author.username)}`}
+                      className="shrink-0"
+                    >
+                      {post.author.avatarUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={post.author.avatarUrl}
+                          alt={post.author.username}
+                          className="h-10 w-10 rounded-full object-cover border border-white/10"
+                        />
+                      ) : (
+                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/20 text-xs font-bold text-primary">
+                          {post.author.username.slice(0, 2).toUpperCase()}
+                        </div>
+                      )}
+                    </Link>
 
                     <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-white">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Link
+                          href={`/u/${encodeURIComponent(post.author.username)}`}
+                          className="text-sm font-semibold text-white hover:text-primary"
+                        >
                           {post.author.displayName || post.author.username}
-                        </span>
+                        </Link>
                         <span className="text-xs text-zinc-500">
                           @{post.author.username}
                         </span>
+                        {isOwner && !post.isSample && (
+                          <span className="rounded-full bg-primary/20 px-2 py-0.5 text-[10px] font-bold text-primary">
+                            You
+                          </span>
+                        )}
                       </div>
                       <span className="text-[11px] text-zinc-400">
                         {formatDistanceToNow(new Date(post.createdAt), {
@@ -724,14 +927,15 @@ export default function CommunityClient({
                     </div>
                   </div>
 
-                  {/* Badges */}
+                  {/* Badges + Owner / Report / Block Controls */}
                   <div className="flex flex-wrap items-center gap-2">
-                    {post.isSample && (
+                    {post.isLocked && (
                       <Badge
                         variant="outline"
-                        className="border-zinc-700 bg-zinc-800/60 text-[10px] text-zinc-400"
+                        className="border-amber-500/40 bg-amber-500/10 text-[10px] text-amber-300"
                       >
-                        Featured Topic
+                        <Lock className="mr-1 h-3 w-3" />
+                        Locked
                       </Badge>
                     )}
 
@@ -749,8 +953,8 @@ export default function CommunityClient({
                       {post.kind}
                     </Badge>
 
-                    {post.mediaTitle && (
-                      post.mediaSlug && post.mediaType ? (
+                    {post.mediaTitle &&
+                      (post.mediaSlug && post.mediaType ? (
                         <Link
                           href={`/${post.mediaType}/${post.mediaSlug}`}
                           className="rounded-full border border-white/10 bg-white/5 px-3 py-0.5 text-[11px] font-medium text-zinc-300 hover:border-primary hover:text-white transition-colors"
@@ -761,74 +965,167 @@ export default function CommunityClient({
                         <span className="rounded-full border border-white/10 bg-white/5 px-3 py-0.5 text-[11px] text-zinc-400">
                           {post.mediaTitle}
                         </span>
-                      )
+                      ))}
+
+                    {!post.isSample && isOwner && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingPostId(post.id);
+                            setEditPostTitle(post.title ?? "");
+                            setEditPostBody(post.body);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] font-semibold text-zinc-300 hover:text-primary"
+                        >
+                          <Edit3 className="h-3 w-3" />
+                          <span>Edit</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isPending}
+                          onClick={() => handleDeletePost(post)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[11px] font-semibold text-rose-300 hover:bg-rose-500/20"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          <span>Delete</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {!post.isSample && !isOwner && currentUser && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setReportTarget({
+                              contentType: targetType,
+                              contentId: targetId,
+                              label: `${post.kind} by @${post.author.username}`,
+                            })
+                          }
+                          className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] font-semibold text-zinc-400 hover:border-rose-500/40 hover:text-rose-300"
+                        >
+                          <Flag className="h-3 w-3" />
+                          <span>Report</span>
+                        </button>
+                        {post.userId && (
+                          <BlockUserButton
+                            targetUserId={post.userId}
+                            targetUsername={post.author.username}
+                            compact
+                            onBlockedChange={() => router.refresh()}
+                          />
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
 
-                {/* Post Title & Body */}
-                <div className="mt-3.5 space-y-2">
-                  {post.title && (
-                    <h3 className="text-base font-bold text-white leading-snug">
-                      {post.title}
-                    </h3>
-                  )}
-
-                  {isSpoilerHidden ? (
-                    <div className="flex flex-col items-center justify-center rounded-xl border border-amber-500/20 bg-amber-500/5 p-6 text-center space-y-2">
-                      <p className="text-xs font-medium text-amber-300">
-                        This post contains spoilers.
-                      </p>
+                {/* Post Title & Body or Inline Editor */}
+                {isEditingPost ? (
+                  <div className="mt-4 space-y-3 rounded-xl border border-primary/30 bg-black/30 p-3.5">
+                    <Input
+                      value={editPostTitle}
+                      onChange={(e) => setEditPostTitle(e.target.value)}
+                      placeholder="Headline / Title"
+                      className="h-9 rounded-lg border-white/15 bg-[#10131c] text-xs text-white"
+                    />
+                    <Textarea
+                      rows={4}
+                      value={editPostBody}
+                      onChange={(e) => setEditPostBody(e.target.value)}
+                      className="rounded-lg border-white/15 bg-[#10131c] text-xs text-white"
+                    />
+                    <div className="flex justify-end gap-2">
                       <Button
                         type="button"
-                        variant="outline"
+                        variant="ghost"
                         size="sm"
-                        onClick={() =>
-                          setRevealedSpoilers((prev) => ({
-                            ...prev,
-                            [post.id]: true,
-                          }))
-                        }
-                        className="h-8 rounded-xl text-xs"
+                        onClick={() => setEditingPostId(null)}
+                        className="text-xs"
                       >
-                        <Eye className="mr-1.5 h-3.5 w-3.5" />
-                        Reveal Spoiler
+                        Cancel
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={isPending}
+                        onClick={() => handleSavePostEdit(post)}
+                        className="bg-primary text-xs text-white"
+                      >
+                        Save Changes
                       </Button>
                     </div>
-                  ) : (
-                    <p className="whitespace-pre-line text-sm text-zinc-200 leading-relaxed">
-                      {post.body}
-                    </p>
-                  )}
-                </div>
+                  </div>
+                ) : (
+                  <div className="mt-3.5 space-y-2">
+                    {post.title && (
+                      <h3 className="text-base font-bold text-white leading-snug">
+                        {post.title}
+                      </h3>
+                    )}
 
-                {/* Post Footer Actions */}
+                    {isSpoilerHidden ? (
+                      <div className="flex flex-col items-center justify-center rounded-xl border border-amber-500/20 bg-amber-500/5 p-6 text-center space-y-2">
+                        <p className="text-xs font-medium text-amber-300">
+                          This post contains spoilers.
+                        </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            setRevealedSpoilers((prev) => ({
+                              ...prev,
+                              [post.id]: true,
+                            }))
+                          }
+                          className="h-8 rounded-xl text-xs"
+                        >
+                          <Eye className="mr-1.5 h-3.5 w-3.5" />
+                          Reveal Spoiler
+                        </Button>
+                      </div>
+                    ) : (
+                      <p className="whitespace-pre-line text-sm text-zinc-200 leading-relaxed">
+                        {post.body}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Post Footer Actions: Replies & Live Reactions */}
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-white/5 pt-3 text-xs text-zinc-400">
-                  <div className="flex items-center gap-4">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setExpandedComments((prev) => ({
-                          ...prev,
-                          [post.id]: !prev[post.id],
-                        }))
-                      }
-                      className="inline-flex items-center gap-1.5 text-zinc-300 hover:text-primary transition-colors"
-                    >
-                      <MessageSquare className="h-4 w-4" />
-                      <span>
-                        {post.replies.length}{" "}
-                        {post.replies.length === 1 ? "Comment" : "Comments"}
-                      </span>
-                    </button>
+                  <div className="flex flex-wrap items-center gap-3">
+                    {post.kind !== "review" && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedComments((prev) => ({
+                            ...prev,
+                            [post.id]: !prev[post.id],
+                          }))
+                        }
+                        className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 font-semibold text-zinc-300 hover:border-primary/40 hover:text-primary transition-colors"
+                      >
+                        <MessageSquare className="h-3.5 w-3.5" />
+                        <span>
+                          {post.replies.length}{" "}
+                          {post.replies.length === 1 ? "Reply" : "Replies"}
+                        </span>
+                      </button>
+                    )}
 
-                    <span
-                      className="inline-flex items-center gap-1.5 text-zinc-500 cursor-not-allowed"
-                      title="Reactions table is not yet configured in Supabase"
-                    >
-                      <Heart className="h-4 w-4" />
-                      <span>Reactions (Read-only)</span>
-                    </span>
+                    {!post.isSample && (
+                      <ReactionBar
+                        targetType={targetType}
+                        targetId={targetId}
+                        initialReactions={post.reactions ?? DEFAULT_REACTIONS}
+                        isAuthenticated={Boolean(currentUser)}
+                        compact
+                      />
+                    )}
                   </div>
 
                   {post.mediaSlug && post.mediaType && (
@@ -841,53 +1138,166 @@ export default function CommunityClient({
                   )}
                 </div>
 
-                {/* Expanded Replies / Comments Drawer */}
+                {/* Expanded Replies Drawer */}
                 {isExpanded && (
                   <div className="mt-4 space-y-3 rounded-xl border border-[#1e253b] bg-[#0b0e17] p-4">
                     {post.replies.length === 0 ? (
-                      <p className="text-xs text-zinc-500">
-                        No replies yet.
-                      </p>
+                      <p className="text-xs text-zinc-500">No replies yet.</p>
                     ) : (
                       <div className="space-y-3">
-                        {post.replies.map((reply) => (
-                          <div
-                            key={reply.id}
-                            className="flex items-start gap-2.5 border-b border-white/5 pb-3 last:border-0 last:pb-0"
-                          >
-                            {reply.author.avatarUrl ? (
-                              <img
-                                src={reply.author.avatarUrl}
-                                alt={reply.author.username}
-                                className="h-7 w-7 rounded-full object-cover"
-                              />
-                            ) : (
-                              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/20 text-[10px] font-bold text-primary">
-                                {reply.author.username.slice(0, 2).toUpperCase()}
+                        {post.replies.map((reply) => {
+                          const isReplyOwner = Boolean(
+                            currentUser &&
+                              (reply.userId === currentUser.id ||
+                                reply.author.username === currentUser.username)
+                          );
+                          const isEditingReply = editingReplyId === reply.id;
+                          const replyTargetType =
+                            reply.targetType ?? "discussion_reply";
+
+                          return (
+                            <div
+                              key={reply.id}
+                              className="flex items-start gap-2.5 border-b border-white/5 pb-3 last:border-0 last:pb-0"
+                            >
+                              <Link
+                                href={`/u/${encodeURIComponent(reply.author.username)}`}
+                                className="shrink-0"
+                              >
+                                {reply.author.avatarUrl ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={reply.author.avatarUrl}
+                                    alt={reply.author.username}
+                                    className="h-7 w-7 rounded-full object-cover"
+                                  />
+                                ) : (
+                                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/20 text-[10px] font-bold text-primary">
+                                    {reply.author.username.slice(0, 2).toUpperCase()}
+                                  </div>
+                                )}
+                              </Link>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2">
+                                    <Link
+                                      href={`/u/${encodeURIComponent(reply.author.username)}`}
+                                      className="text-xs font-semibold text-white hover:text-primary"
+                                    >
+                                      {reply.author.displayName || reply.author.username}
+                                    </Link>
+                                    <span className="text-[10px] text-zinc-500">
+                                      {formatDistanceToNow(new Date(reply.createdAt), {
+                                        addSuffix: true,
+                                      })}
+                                    </span>
+                                  </div>
+
+                                  {!post.isSample && (
+                                    <div className="flex items-center gap-2">
+                                      {isReplyOwner ? (
+                                        <>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setEditingReplyId(reply.id);
+                                              setEditReplyBody(reply.body);
+                                            }}
+                                            className="text-[11px] font-semibold text-zinc-400 hover:text-primary"
+                                          >
+                                            Edit
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleDeleteReply(reply)}
+                                            className="text-[11px] font-semibold text-rose-300 hover:underline"
+                                          >
+                                            Delete
+                                          </button>
+                                        </>
+                                      ) : (
+                                        currentUser && (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              setReportTarget({
+                                                contentType: replyTargetType,
+                                                contentId: reply.id,
+                                                label: `reply by @${reply.author.username}`,
+                                              })
+                                            }
+                                            className="text-[11px] font-semibold text-zinc-400 hover:text-rose-300"
+                                          >
+                                            Report
+                                          </button>
+                                        )
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {isEditingReply ? (
+                                  <div className="mt-2 space-y-2">
+                                    <Input
+                                      value={editReplyBody}
+                                      onChange={(e) => setEditReplyBody(e.target.value)}
+                                      className="h-8 rounded-lg border-white/15 bg-[#121625] text-xs text-white"
+                                    />
+                                    <div className="flex gap-2">
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => setEditingReplyId(null)}
+                                        className="h-7 text-[11px]"
+                                      >
+                                        Cancel
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        onClick={() => handleSaveReplyEdit(reply)}
+                                        className="h-7 bg-primary text-[11px] text-white"
+                                      >
+                                        Save
+                                      </Button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <p className="mt-1 text-xs text-zinc-300 leading-relaxed">
+                                    {reply.body}
+                                  </p>
+                                )}
+
+                                {!post.isSample && (
+                                  <div className="mt-2">
+                                    <ReactionBar
+                                      targetType={replyTargetType}
+                                      targetId={reply.id}
+                                      initialReactions={
+                                        reply.reactions ?? DEFAULT_REACTIONS
+                                      }
+                                      isAuthenticated={Boolean(currentUser)}
+                                      compact
+                                    />
+                                  </div>
+                                )}
                               </div>
-                            )}
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-semibold text-white">
-                                  {reply.author.displayName || reply.author.username}
-                                </span>
-                                <span className="text-[10px] text-zinc-500">
-                                  {formatDistanceToNow(new Date(reply.createdAt), {
-                                    addSuffix: true,
-                                  })}
-                                </span>
-                              </div>
-                              <p className="mt-1 text-xs text-zinc-300 leading-relaxed">
-                                {reply.body}
-                              </p>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
 
                     {/* Reply Input */}
-                    {canReplyInDb ? (
+                    {post.isLocked ? (
+                      <div className="flex items-center gap-1.5 pt-2 text-[11px] text-amber-300">
+                        <Lock className="h-3.5 w-3.5 shrink-0" />
+                        <span>
+                          This discussion has been locked by a moderator. New replies are disabled.
+                        </span>
+                      </div>
+                    ) : canReplyInDb ? (
                       currentUser ? (
                         <div className="pt-2 space-y-2">
                           <div className="flex items-center gap-2">
@@ -929,7 +1339,7 @@ export default function CommunityClient({
                         <div className="flex items-center justify-between pt-2 text-xs text-zinc-400">
                           <span>Sign in to reply to this discussion.</span>
                           <Link
-                            href="/auth/login"
+                            href="/login"
                             className="font-semibold text-primary hover:underline"
                           >
                             Sign in →
@@ -951,7 +1361,31 @@ export default function CommunityClient({
               </article>
             );
           })}
+
+          {visibleCount < filteredPosts.length && (
+            <div className="pt-2 text-center">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setVisibleCount((c) => c + 12)}
+                className="rounded-xl text-xs font-semibold"
+              >
+                <ChevronDown className="mr-1.5 h-3.5 w-3.5" />
+                Load More ({paginatedPosts.length} of {filteredPosts.length})
+              </Button>
+            </div>
+          )}
         </div>
+      )}
+
+      {reportTarget && (
+        <ReportContentModal
+          isOpen={true}
+          onClose={() => setReportTarget(null)}
+          contentType={reportTarget.contentType}
+          contentId={reportTarget.contentId}
+          contentLabel={reportTarget.label}
+        />
       )}
     </div>
   );

@@ -33,11 +33,15 @@ import {
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { useShell } from "@/components/shell-context";
+import { signOutUserAction } from "@/lib/actions/authActions";
+import { unblockUserAction } from "@/lib/actions/communityActions";
 import {
   clearAccountDataAction,
   updatePasswordAction,
   updateProfileSettingsAction,
   updateUserPreferencesAction,
+  updateProfileVisibilityAction,
+  uploadAvatarAction,
   type AccentColorId,
   type ProfileSettingsData,
   type ThemeModeId,
@@ -137,7 +141,7 @@ interface SettingsClientProps {
 
 export default function SettingsClient({ initialData }: SettingsClientProps) {
   const router = useRouter();
-  const { rightOpen, toggleRight } = useShell();
+  const { rightOpen, toggleRight, refreshUser } = useShell();
 
   const [activeTab, setActiveTab] = useState<SettingsTab>(
     initialData ? "profile" : "appearance"
@@ -180,6 +184,84 @@ export default function SettingsClient({ initialData }: SettingsClientProps) {
 
   // Danger zone state
   const [clearConfirmation, setClearConfirmation] = useState("");
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [profileVisibility, setProfileVisibility] = useState<"public" | "private">(
+    initialData?.profileVisibility ?? "public"
+  );
+  const [blockedUsers, setBlockedUsers] = useState(
+    initialData?.blockedUsers ?? []
+  );
+
+  function handleChangeProfileVisibility(nextVis: "public" | "private") {
+    setFeedback(null);
+    setProfileVisibility(nextVis);
+    startTransition(async () => {
+      const res = await updateProfileVisibilityAction({ visibility: nextVis });
+      if (!res.success) {
+        setFeedback({
+          type: "error",
+          text: res.error || "Failed to update profile visibility.",
+        });
+        return;
+      }
+      setFeedback({
+        type: "success",
+        text: res.message || `Profile visibility updated to ${nextVis}.`,
+      });
+      router.refresh();
+    });
+  }
+
+  function handleUnblockUser(blockedUserId: string) {
+    setFeedback(null);
+    startTransition(async () => {
+      const res = await unblockUserAction({ blockedUserId });
+      if (!res.success) {
+        setFeedback({
+          type: "error",
+          text: res.error || "Failed to unblock user.",
+        });
+        return;
+      }
+      setBlockedUsers((prev) => prev.filter((u) => u.id !== blockedUserId));
+      setFeedback({
+        type: "success",
+        text: "User has been unblocked.",
+      });
+      router.refresh();
+    });
+  }
+
+  async function handleAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || uploadingAvatar || !initialData) return;
+
+    setFeedback(null);
+    setUploadingAvatar(true);
+    try {
+      const formData = new FormData();
+      formData.set("avatar", file);
+      const res = await uploadAvatarAction(formData);
+      if (!res.success || !res.avatarUrl) {
+        setFeedback({
+          type: "error",
+          text: res.error || "Failed to upload avatar image.",
+        });
+        return;
+      }
+      setAvatarUrl(res.avatarUrl);
+      setLastUpdated(new Date().toISOString());
+      setFeedback({
+        type: "success",
+        text: res.message || "Avatar uploaded and saved to your profile.",
+      });
+      await refreshUser();
+      router.refresh();
+    } finally {
+      setUploadingAvatar(false);
+    }
+  }
   const [signingOutScope, setSigningOutScope] = useState<
     "local" | "global" | null
   >(null);
@@ -421,7 +503,9 @@ export default function SettingsClient({ initialData }: SettingsClientProps) {
         setSigningOutScope(null);
         return;
       }
-      router.push("/auth/login");
+      await Promise.allSettled([signOutUserAction(scope), supabase.auth.signOut({ scope })]);
+      await refreshUser();
+      router.push("/");
       router.refresh();
     } catch (err) {
       setFeedback({
@@ -521,13 +605,13 @@ export default function SettingsClient({ initialData }: SettingsClientProps) {
       </p>
       <div className="flex flex-wrap items-center justify-center gap-3">
         <Link
-          href="/auth/login"
+          href="/login"
           className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-xs font-bold text-primary-foreground shadow-lg shadow-primary/25 hover:brightness-110 transition-all"
         >
           Sign In to Nayozu
         </Link>
         <Link
-          href="/auth/sign-up"
+          href="/register"
           className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-[#151a2a] px-5 py-2.5 text-xs font-semibold text-zinc-200 hover:bg-[#1c2236] hover:text-white transition-colors"
         >
           Create Free Account
@@ -822,7 +906,28 @@ export default function SettingsClient({ initialData }: SettingsClientProps) {
                       htmlFor="settings-avatar-url"
                       className="block text-xs font-semibold text-zinc-300"
                     >
-                      Avatar Image URL
+                      Avatar Image (Upload or URL)
+                    </label>
+                    <div className="flex flex-wrap items-center gap-2 pb-1">
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-primary/40 bg-primary/15 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/25 transition-colors">
+                        {uploadingAvatar ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            Uploading...
+                          </>
+                        ) : (
+                          <span>Upload Image File (JPEG, PNG, WebP, GIF · max 2 MB)</span>
+                        )}
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp,image/gif"
+                          disabled={isPending || uploadingAvatar}
+                          onChange={handleAvatarUpload}
+                          className="sr-only"
+                        />
+                      </label>
+                    </div>
+                    <label className="sr-only">
                     </label>
                     <input
                       id="settings-avatar-url"
@@ -1196,6 +1301,9 @@ export default function SettingsClient({ initialData }: SettingsClientProps) {
                   </div>
                   <button
                     type="button"
+                    data-right-panel-trigger="true"
+                    aria-expanded={rightOpen}
+                    aria-controls="community-activity-panel"
                     onClick={toggleRight}
                     className={cn(
                       "rounded-xl px-4 py-2 text-xs font-bold transition-colors",
@@ -1268,6 +1376,117 @@ export default function SettingsClient({ initialData }: SettingsClientProps) {
                         alongside Supabase Row Level Security policies.
                       </p>
                     </div>
+                  </div>
+
+                  {/* Profile Visibility Selector (Milestone 4 Section 2) */}
+                  <div className="rounded-2xl border border-primary/30 bg-[#14192a] p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-bold text-white">
+                          Profile Visibility
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-zinc-400">
+                          Control who can view your public profile page at{" "}
+                          <Link
+                            href={`/u/${encodeURIComponent(username)}`}
+                            className="font-semibold text-primary hover:underline"
+                          >
+                            /u/{username}
+                          </Link>
+                          . Personal libraries, watch history, and favorites are always private.
+                        </p>
+                      </div>
+                      <span className="rounded-full border border-primary/30 bg-primary/15 px-2.5 py-0.5 text-[10px] font-bold uppercase text-primary">
+                        {profileVisibility === "private" ? "Private Profile" : "Public Profile"}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        disabled={isPending}
+                        onClick={() => handleChangeProfileVisibility("public")}
+                        className={cn(
+                          "flex flex-col items-start rounded-xl border p-3 text-left transition",
+                          profileVisibility === "public"
+                            ? "border-primary bg-primary/15 text-white"
+                            : "border-white/10 bg-[#101422] text-zinc-300 hover:border-white/20"
+                        )}
+                      >
+                        <span className="text-xs font-bold text-white">
+                          Public (Default)
+                        </span>
+                        <span className="mt-1 text-[11px] text-zinc-400">
+                          Anyone can view your public profile bio, join date, and public reviews/discussions.
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={isPending}
+                        onClick={() => handleChangeProfileVisibility("private")}
+                        className={cn(
+                          "flex flex-col items-start rounded-xl border p-3 text-left transition",
+                          profileVisibility === "private"
+                            ? "border-primary bg-primary/15 text-white"
+                            : "border-white/10 bg-[#101422] text-zinc-300 hover:border-white/20"
+                        )}
+                      >
+                        <span className="text-xs font-bold text-white">
+                          Private
+                        </span>
+                        <span className="mt-1 text-[11px] text-zinc-400">
+                          Only you can view your personal profile details. Visitors see a private profile notice.
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Blocked Users Management (Milestone 4 Section 8) */}
+                  <div className="rounded-2xl border border-white/10 bg-[#151a2a] p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-xs font-bold text-white">
+                          Blocked Users ({blockedUsers.length})
+                        </p>
+                        <p className="text-[11px] text-zinc-400">
+                          Blocked users cannot reply or react to your content, and their posts are hidden from your personal feeds.
+                        </p>
+                      </div>
+                    </div>
+
+                    {blockedUsers.length === 0 ? (
+                      <p className="text-xs text-zinc-500">
+                        You have not blocked any users.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {blockedUsers.map((bu) => (
+                          <div
+                            key={bu.id}
+                            className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-[#101422] px-3 py-2"
+                          >
+                            <div>
+                              <p className="text-xs font-bold text-white">
+                                {bu.displayName || `@${bu.username}`}
+                              </p>
+                              <p className="text-[11px] text-zinc-400">
+                                @{bu.username} · Blocked{" "}
+                                {new Date(bu.blockedAt).toLocaleDateString()}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={isPending}
+                              onClick={() => handleUnblockUser(bu.id)}
+                              className="rounded-lg border border-white/15 bg-white/5 px-3 py-1 text-xs font-semibold text-white hover:bg-white/10 disabled:opacity-50"
+                            >
+                              Unblock
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {/* RLS Protected Library Status */}

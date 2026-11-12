@@ -15,7 +15,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { createClient } from "@/lib/supabase/client";
+import { upsertLibraryEntryAction } from "@/lib/actions/libraryActions";
 import { AUTH_ENABLED } from "@/lib/features";
+import { CommentList } from "@/components/comment-list";
 import type { MangaChapter } from "@/lib/providers/mediaProviderAdapter";
 
 interface MangaReaderProps {
@@ -85,12 +87,26 @@ export default function MangaReader({
     setSavingProgress(true);
     try {
       const isCompleted = newChapterNumber >= chapters.length;
+      const nextStatus = isCompleted ? "completed" : "watching";
+      const extId = Number(animeId);
+      if (Number.isFinite(extId) && extId > 0) {
+        const res = await upsertLibraryEntryAction({
+          externalId: extId,
+          mediaType: "manga",
+          status: nextStatus,
+          progress: newChapterNumber,
+        });
+        if (res.success) {
+          setProgress(newChapterNumber);
+          return;
+        }
+      }
       await supabase.from("user_anime_library").upsert(
         {
           user_id: userId,
-          anime_id: animeId,
+          anime_id: `manga:${animeId}`,
           progress: newChapterNumber,
-          status: isCompleted ? "completed" : "watching",
+          status: nextStatus,
           updated_at: new Date().toISOString(),
         },
         { onConflict: "user_id,anime_id" }
@@ -139,7 +155,7 @@ export default function MangaReader({
     if (!AUTH_ENABLED) return;
 
     if (!userId) {
-      router.push("/auth/login");
+      router.push("/login");
       return;
     }
     const isRead = progress >= currentChapter.number;
@@ -350,6 +366,16 @@ export default function MangaReader({
               <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
+        </div>
+      )}
+      {AUTH_ENABLED && currentChapter && (
+        <div className="rounded-2xl border border-white/10 bg-[#10131c] p-4 md:p-5">
+          <CommentList
+            animeId={animeId}
+            mediaType="manga"
+            chapterNumber={currentChapter.number}
+            contextLabel={`Chapter ${currentChapter.number} Discussion (${title})`}
+          />
         </div>
       )}
     </div>

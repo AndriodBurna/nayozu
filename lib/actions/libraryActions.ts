@@ -63,11 +63,14 @@ function revalidateLibraryPaths() {
   revalidatePath("/history");
   revalidatePath("/favorites");
   revalidatePath("/library");
+  revalidatePath("/profile");
 }
 
 /**
  * Add or update a user's Watchlist (anime) or Reading List (manga) entry.
- * Enforces server-side authentication and RLS (user_id === user.id).
+ * Enforces server-side authentication and RLS (user_id === user.id) and uses a
+ * deterministic canonical storage key so concurrent upserts resolve atomically via
+ * `ON CONFLICT (user_id, anime_id)`.
  */
 export async function upsertLibraryEntryAction(input: {
   externalId: number;
@@ -78,6 +81,10 @@ export async function upsertLibraryEntryAction(input: {
   const extId = Number(input.externalId);
   if (!Number.isFinite(extId) || extId <= 0) {
     return { success: false, error: "Invalid title ID." };
+  }
+
+  if (input.mediaType !== "anime" && input.mediaType !== "manga") {
+    return { success: false, error: "Invalid media type." };
   }
 
   if (!VALID_STATUSES.includes(input.status)) {
@@ -130,22 +137,9 @@ export async function upsertLibraryEntryAction(input: {
       ? "completed"
       : input.status;
 
-  // Store numeric string for anime (compatible with MediaPlayer) and manga (or manga:<id> if needed)
-  // First check if user already has a row for String(extId) or `${mediaType}:${extId}`
-  const candidateKeys =
-    input.mediaType === "manga"
-      ? [`manga:${extId}`, String(extId)]
-      : [String(extId)];
-
-  const { data: existingRows } = await supabase
-    .from("user_anime_library")
-    .select("id, anime_id")
-    .eq("user_id", user.id)
-    .in("anime_id", candidateKeys);
-
+  // Deterministic canonical key prevents cross-media ID collisions and TOCTOU races
   const storageKey =
-    existingRows?.[0]?.anime_id ??
-    (input.mediaType === "manga" ? `manga:${extId}` : String(extId));
+    input.mediaType === "manga" ? `manga:${extId}` : String(extId);
 
   const now = new Date().toISOString();
   const { error: upsertErr } = await supabase.from("user_anime_library").upsert(
@@ -226,6 +220,10 @@ export async function toggleFavoriteAction(input: {
     return { success: false, error: "Invalid title ID." };
   }
 
+  if (input.mediaType !== "anime" && input.mediaType !== "manga") {
+    return { success: false, error: "Invalid media type." };
+  }
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -273,7 +271,7 @@ export async function toggleFavoriteAction(input: {
     return { success: true, isFavorite: false };
   }
 
-  // Verify title exists in public.anime before inserting
+  // Verify title exists in public.anime before upserting
   const { data: mediaRow } = await supabase
     .from("anime")
     .select("external_id")
@@ -289,19 +287,21 @@ export async function toggleFavoriteAction(input: {
   }
 
   const now = new Date().toISOString();
-  const { error: insErr } = await supabase.from("user_anime_library").insert({
-    user_id: user.id,
-    anime_id: favKey,
-    status: "completed",
-    progress: 0,
-    created_at: now,
-    updated_at: now,
-  });
+  const { error: upsertErr } = await supabase.from("user_anime_library").upsert(
+    {
+      user_id: user.id,
+      anime_id: favKey,
+      status: "completed",
+      progress: 0,
+      updated_at: now,
+    },
+    { onConflict: "user_id,anime_id" }
+  );
 
-  if (insErr) {
+  if (upsertErr) {
     return {
       success: false,
-      error: insErr.message || "Failed to add to Favorites.",
+      error: upsertErr.message || "Failed to add to Favorites.",
     };
   }
 

@@ -1,219 +1,203 @@
-"use client";
+import type { Metadata } from "next";
+import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
+import { loadUserLibraryBundle } from "@/lib/services/userLibraryServer";
+import ProfileClient, { type ProfilePageData } from "./profile-client";
 
-import { useRouter } from "next/navigation";
-import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
-import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
+export const dynamic = "force-dynamic";
 
-export default function ProfilePage() {
-  const router = useRouter();
-  const [profile, setProfile] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [editMode, setEditMode] = useState(false);
-  const [displayName, setDisplayName] = useState("");
-  const [bio, setBio] = useState("");
+export const metadata: Metadata = {
+  title: "My Profile | Nayozu",
+  description:
+    "View and manage your Nayozu profile, username, bio, personal anime and manga libraries, reviews, discussions, and comments.",
+};
 
-  // Fetch profile
-  async function fetchProfile() {
-    setLoading(true);
-    const supabase = createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+export default async function ProfilePage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ tab?: string }>;
+}) {
+  const resolvedParams = searchParams ? await searchParams : {};
+  const initialTab = resolvedParams?.tab || "watchlist";
 
-    if (!user) {
-      router.push("/auth/login");
-      return;
-    }
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
 
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", user.id)
-      .single();
-
-    if (error) {
-      setError("Failed to load profile");
-    } else {
-      setProfile(data);
-      setDisplayName(data.display_name || "");
-      setBio(data.bio || "");
-    }
-    setLoading(false);
+  if (authError || !user) {
+    redirect("/login?next=/profile");
   }
 
-  // Update profile
-  async function updateProfile() {
-    setLoading(true);
-    const supabase = createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+  const fallbackUsername =
+    (user.user_metadata?.username as string | undefined) ||
+    user.email?.split("@")[0]?.replace(/[^a-zA-Z0-9_-]/g, "_") ||
+    `user_${user.id.slice(0, 8)}`;
 
-    if (!user) {
-      router.push("/auth/login");
-      return;
-    }
+  const fallbackDisplayName =
+    (user.user_metadata?.display_name as string | undefined) || fallbackUsername;
 
-    const { error } = await supabase
-      .from("profiles")
-      .update({
-        display_name: displayName,
-        bio: bio,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", user.id);
+  const fallbackAvatarUrl =
+    (user.user_metadata?.avatar_url as string | undefined) || "";
 
-    if (error) {
-      setError("Failed to update profile");
-    } else {
-      setProfile({
-        ...profile,
-        display_name: displayName,
-        bio: bio,
-        updated_at: new Date().toISOString(),
-      });
-      setEditMode(false);
-    }
-    setLoading(false);
-  }
-
-  // Fetch profile on mount
-  useEffect(() => {
-    fetchProfile();
-  }, []);
-
-  if (loading) {
-    return <div className="flex h-[60vh] items-center justify-center">Loading...</div>;
-  }
-
-  if (error) {
-    return <div className="flex h-[60vh] items-center justify-center">{error}</div>;
-  }
-
-  if (!profile) {
-    return <div className="flex h-[60vh] items-center justify-center">Profile not found</div>;
-  }
-
-  return (
-    <div className="min-h-screen bg-[#080D18] text-[#F4F6FC] p-6">
-      <div className="max-w-2xl mx-auto">
-        <div className="flex flex-col items-center">
-          <h1 className="text-3xl font-bold text-white mb-6">Profile</h1>
-        </div>
-
-        <div className="bg-[#101827/80] rounded-lg p-6">
-          {!editMode ? (
-            <div>
-              <div className="space-y-4">
-                <div className="flex items-center">
-                  {profile.avatar_url ? (
-                    <img
-                      src={profile.avatar_url}
-                      alt="Avatar"
-                      className="w-16 h-16 rounded-full mr-4"
-                    />
-                  ) : (
-                    <div className="w-16 h-16 rounded-full bg-gray-500 flex items-center justify-center text-white">
-                      {profile.username?.charAt(0) ?? "?"}
-                    </div>
-                  )}
-                  <div className="space-y-2">
-                    <h2 className="text-xl font-bold text-white">
-                      {profile.display_name || profile.username}
-                    </h2>
-                    <p className="text-sm text-gray-400">
-                      @{profile.username}
-                    </p>
-                  </div>
-                </div>
-
-                {profile.bio && (
-                  <div className="pt-4 border-t">
-                    <p className="text-gray-300">{profile.bio}</p>
-                  </div>
-                )}
-
-                <div className="mt-6 flex justify-end">
-                  <Button
-                    onClick={() => setEditMode(true)}
-                    className="bg-[#7047F5] hover:bg-[#5a37f5]"
-                  >
-                    Edit Profile
-                  </Button>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div>
-              <form className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="display-name">Display Name</Label>
-                  <Input
-                    id="display-name"
-                    type="text"
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="bio">Bio</Label>
-                  <textarea
-                    id="bio"
-                    value={bio}
-                    onChange={(e) => setBio(e.target.value)}
-                    className="w-full p-2 rounded border border-gray-600 bg-[#101827/80] text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#7047F5]"
-                    rows={4}
-                  />
-                </div>
-
-                <div className="flex justify-end space-x-3">
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setEditMode(false);
-                      setDisplayName(profile.display_name || "");
-                      setBio(profile.bio || "");
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    onClick={updateProfile}
-                  >
-                    Save Changes
-                  </Button>
-                </div>
-              </form>
-            </div>
-          )}
-        </div>
-
-        <div className="mt-8">
-          <h2 className="text-2xl font-bold text-white mb-4">Personal Library</h2>
-          <div className="bg-[#101827/80] rounded-lg p-4">
-            <p className="text-gray-400">
-              Your personal anime library will appear here once you add some anime.
-            </p>
-            <div className="mt-4 text-center">
-              <Link
-                href="/library"
-                className="text-[#7047F5] hover:underline"
-              >
-                View Your Library →
-              </Link>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+  // Ensure profile row exists in public.profiles (graceful self-healing)
+  await supabase.from("profiles").upsert(
+    {
+      id: user.id,
+      username: fallbackUsername,
+      display_name: fallbackDisplayName,
+      avatar_url: fallbackAvatarUrl || null,
+    },
+    { onConflict: "id", ignoreDuplicates: true }
   );
+
+  const [
+    profileRes,
+    roleRes,
+    libraryBundle,
+    reviewsRes,
+    ratingsRes,
+    discussionsRes,
+    commentsRes,
+    mediaRes,
+  ] = await Promise.all([
+    supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
+    supabase
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", user.id)
+      .maybeSingle(),
+    loadUserLibraryBundle(),
+    supabase
+      .from("anime_reviews")
+      .select("id, anime_id, title, body, created_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(50),
+    supabase
+      .from("anime_ratings")
+      .select("anime_id, score")
+      .eq("user_id", user.id),
+    supabase
+      .from("discussions")
+      .select(
+        "id, anime_id, media_type, category, title, body, is_locked, created_at"
+      )
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(50),
+    supabase
+      .from("anime_comments")
+      .select(
+        "id, anime_id, media_type, episode_number, chapter_number, body, created_at"
+      )
+      .eq("user_id", user.id)
+      .neq("anime_id", "watch_room")
+      .order("created_at", { ascending: false })
+      .limit(50),
+    supabase
+      .from("anime")
+      .select("external_id, slug, title_romaji, title_english, media_type")
+      .limit(200),
+  ]);
+
+  const mediaMap = new Map<
+    string,
+    { title: string; slug: string; mediaType: "anime" | "manga" }
+  >();
+  for (const m of mediaRes.data ?? []) {
+    const mt = m.media_type === "manga" ? "manga" : "anime";
+    const title = m.title_english || m.title_romaji;
+    mediaMap.set(String(m.external_id), { title, slug: m.slug, mediaType: mt });
+    if (mt === "manga") {
+      mediaMap.set(`manga:${m.external_id}`, {
+        title,
+        slug: m.slug,
+        mediaType: "manga",
+      });
+    }
+  }
+
+  const scoreByMedia = new Map<string, number>();
+  for (const r of ratingsRes.data ?? []) {
+    scoreByMedia.set(r.anime_id, Number(r.score));
+  }
+
+  const profileRow = profileRes.data;
+
+  const initialProfile: ProfilePageData = {
+    id: user.id,
+    email: user.email ?? null,
+    username: profileRow?.username || fallbackUsername,
+    displayName:
+      profileRow?.display_name || fallbackDisplayName || fallbackUsername,
+    avatarUrl: profileRow?.avatar_url || fallbackAvatarUrl || "",
+    bio: profileRow?.bio || "",
+    profileVisibility:
+      profileRow?.profile_visibility === "private" ? "private" : "public",
+    role: roleRes.data?.role || "user",
+    createdAt: profileRow?.created_at || user.created_at || null,
+    updatedAt: profileRow?.updated_at || null,
+    initialTab,
+    animeWatchlist: libraryBundle.animeWatchlist,
+    mangaReadingList: libraryBundle.mangaReadingList,
+    favorites: libraryBundle.favorites,
+    historyItems: libraryBundle.historyItems,
+    myReviews: (reviewsRes.data ?? []).map((r) => {
+      const m = mediaMap.get(r.anime_id);
+      return {
+        id: r.id,
+        animeId: r.anime_id,
+        mediaTitle: m?.title ?? `Title #${r.anime_id}`,
+        mediaSlug: m?.slug ?? null,
+        mediaType:
+          r.anime_id.startsWith("manga:") ? "manga" : m?.mediaType ?? "anime",
+        title: r.title,
+        body: r.body,
+        score: scoreByMedia.get(r.anime_id) ?? null,
+        createdAt: r.created_at,
+      };
+    }),
+    myDiscussions: (discussionsRes.data ?? []).map((d) => {
+      const m =
+        d.anime_id && d.anime_id !== "community"
+          ? mediaMap.get(d.anime_id)
+          : undefined;
+      return {
+        id: d.id,
+        category: d.category === "question" ? "question" : "discussion",
+        title: d.title,
+        body: d.body,
+        mediaTitle: m?.title ?? null,
+        mediaSlug: m?.slug ?? null,
+        mediaType:
+          d.media_type === "anime" || d.media_type === "manga"
+            ? d.media_type
+            : m?.mediaType ?? null,
+        isLocked: Boolean(d.is_locked),
+        createdAt: d.created_at,
+      };
+    }),
+    myComments: (commentsRes.data ?? []).map((c) => {
+      const m = mediaMap.get(c.anime_id);
+      return {
+        id: c.id,
+        animeId: c.anime_id,
+        mediaTitle:
+          c.anime_id === "community"
+            ? "General Community"
+            : m?.title ?? `Title #${c.anime_id}`,
+        mediaSlug: m?.slug ?? null,
+        mediaType:
+          c.media_type === "manga" ? "manga" : m?.mediaType ?? "anime",
+        episodeNumber: c.episode_number ?? null,
+        chapterNumber: c.chapter_number ?? null,
+        body: c.body,
+        createdAt: c.created_at,
+      };
+    }),
+  };
+
+  return <ProfileClient initialProfile={initialProfile} />;
 }

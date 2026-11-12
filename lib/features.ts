@@ -4,7 +4,7 @@
  * Sign In / Register buttons, Library links and "add to library" controls
  * will all come back. Nothing was deleted.
  */
-export const AUTH_ENABLED = false;
+export const AUTH_ENABLED = true;
 
 /**
  * When false, only real official/authorized media streams and chapters are returned.

@@ -38,13 +38,13 @@ export default function MediaLibraryControls({
     return (
       <div className="flex flex-wrap items-center gap-2.5 pt-1">
         <Button asChild variant="outline" size="sm" className="rounded-xl text-xs">
-          <Link href="/auth/login">
+          <Link href="/login">
             <Bookmark className="mr-1.5 h-3.5 w-3.5" />
             Sign in to add to {mediaType === "manga" ? "Reading List" : "Watchlist"}
           </Link>
         </Button>
         <Button asChild variant="ghost" size="sm" className="rounded-xl text-xs text-zinc-400">
-          <Link href="/auth/login">
+          <Link href="/login">
             <Heart className="mr-1.5 h-3.5 w-3.5" />
             Favorite
           </Link>
@@ -113,10 +113,10 @@ export default function MediaLibraryControls({
               className="bg-transparent text-xs font-semibold text-white focus:outline-none"
             >
               <option value="planned" className="bg-[#121625]">
-                {mediaType === "manga" ? "Plan to Read" : "Plan to Watch"}
+                Planning ({mediaType === "manga" ? "Plan to Read" : "Plan to Watch"})
               </option>
               <option value="watching" className="bg-[#121625]">
-                {mediaType === "manga" ? "Reading" : "Watching"}
+                In Progress ({mediaType === "manga" ? "Reading" : "Watching"})
               </option>
               <option value="completed" className="bg-[#121625]">
                 Completed

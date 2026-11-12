@@ -1,11 +1,17 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
+import type { User } from "@supabase/supabase-js";
 import "./globals.css";
 import Header from "@/components/header";
 import Sidebar from "@/components/sidebar";
 import RightPanel from "@/components/right-panel";
 import BottomNav from "@/components/bottom-nav";
-import { ShellProvider } from "@/components/shell-context";
+import {
+  ShellProvider,
+  type ShellUserRole,
+} from "@/components/shell-context";
+import { AUTH_ENABLED } from "@/lib/features";
+import { createClient } from "@/lib/supabase/server";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -17,17 +23,47 @@ export const metadata: Metadata = {
   description: "Discover, track and discuss your favorite anime and manga.",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  let initialUser: User | null = null;
+  let initialUserRole: ShellUserRole = null;
+
+  if (AUTH_ENABLED) {
+    const supabase = await createClient();
+    try {
+      const { data, error } = await supabase.auth.getUser();
+      if (!error && data?.user) {
+        initialUser = data.user;
+        const { data: roleRow } = await supabase
+          .from("user_roles")
+          .select("role")
+          .eq("user_id", data.user.id)
+          .maybeSingle();
+
+        if (roleRow?.role === "admin" || roleRow?.role === "moderator") {
+          initialUserRole = roleRow.role;
+        } else {
+          initialUserRole = "user";
+        }
+      }
+    } catch {
+      initialUser = null;
+      initialUserRole = null;
+    }
+  }
+
   return (
-    <html lang="en" className="dark" suppressHydrationWarning>
+    <html lang="en" className="dark overflow-x-hidden" suppressHydrationWarning>
       <body
-        className={`${geistSans.className} antialiased bg-[#0b0d14] text-[#F1F3F9] min-h-screen flex flex-col`}
+        className={`${geistSans.className} antialiased bg-[#0b0d14] text-[#F1F3F9] min-h-screen flex flex-col overflow-x-hidden`}
       >
-        <ShellProvider>
+        <ShellProvider
+          initialUser={initialUser}
+          initialUserRole={initialUserRole}
+        >
           {/* Top Sticky Header */}
           <Header />
 

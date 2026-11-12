@@ -2,20 +2,71 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { hasEnvVars } from "../utils";
 
-// Pages that need a signed-in user. Everything else is public.
-// (Add "/admin" back here when the admin panel is built.)
-const PROTECTED_PATHS = ["/library", "/profile", "/admin", "/protected"];
+// Pages that strictly redirect unauthenticated visitors to /login.
+// Note: Public discovery pages (/, /anime, /manga, /series, /movies, /coming-soon, /calendar, /discover, /search)
+// remain accessible to signed-out visitors.
+const PROTECTED_PATHS = [
+  "/library",
+  "/watchlist",
+  "/reading-list",
+  "/history",
+  "/favorites",
+  "/profile",
+  "/settings",
+  "/moderation",
+  "/admin",
+  "/protected",
+];
+
+const AUTH_GUEST_ONLY_PATHS = ["/login", "/register", "/auth/login", "/auth/sign-up"];
+
+const DISALLOWED_REDIRECT_PREFIXES = [
+  "/login",
+  "/register",
+  "/forgot-password",
+  "/auth/login",
+  "/auth/sign-up",
+  "/auth/forgot-password",
+  "/auth/error",
+];
 
 const isProtectedPath = (pathname: string) =>
   PROTECTED_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+
+const isAuthGuestOnlyPath = (pathname: string) =>
+  AUTH_GUEST_ONLY_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+
+export function sanitizeRedirectPath(rawNext: string | null | undefined, fallback = "/"): string {
+  if (!rawNext || typeof rawNext !== "string") return fallback;
+  const trimmed = rawNext.trim();
+  // Reject control characters, non-leading "/", protocol-relative "//", or backslash "/\"
+  if (
+    !trimmed.startsWith("/") ||
+    trimmed.startsWith("//") ||
+    trimmed.startsWith("/\\") ||
+    /[\x00-\x1f\x7f\\]/.test(trimmed)
+  ) {
+    return fallback;
+  }
+  if (/^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(trimmed)) {
+    return fallback;
+  }
+  const pathOnly = trimmed.split("?")[0]?.split("#")[0] || "/";
+  if (
+    DISALLOWED_REDIRECT_PREFIXES.some(
+      (p) => pathOnly === p || pathOnly.startsWith(`${p}/`)
+    )
+  ) {
+    return fallback;
+  }
+  return trimmed;
+}
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
   });
 
-  // If the env vars are not set, skip proxy check. You can remove this
-  // once you setup the project.
   if (!hasEnvVars) {
     return supabaseResponse;
   }
@@ -24,7 +75,8 @@ export async function updateSession(request: NextRequest) {
   // variable. Always create a new one on each request.
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+    (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!,
     {
       cookies: {
         getAll() {
@@ -45,35 +97,29 @@ export async function updateSession(request: NextRequest) {
     },
   );
 
-  // Do not run code between createServerClient and
-  // supabase.auth.getClaims(). A simple mistake could make it very hard to debug
-  // issues with users being randomly logged out.
+  // Verify identity server-side and refresh session tokens via getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  // IMPORTANT: If you remove getClaims() and you use server-side rendering
-  // with the Supabase client, your users may be randomly logged out.
-  const { data } = await supabase.auth.getClaims();
-  const user = data?.claims;
+  const { pathname } = request.nextUrl;
 
-  // Only private pages redirect to login. The home page, /anime and
-  // /anime/[slug] are public.
-  if (!user && isProtectedPath(request.nextUrl.pathname)) {
+  // Redirect unauthenticated users away from protected routes to /login
+  if (!user && isProtectedPath(pathname)) {
     const url = request.nextUrl.clone();
-    url.pathname = "/auth/login";
+    url.pathname = "/login";
+    url.searchParams.set("next", pathname);
     return NextResponse.redirect(url);
   }
 
-  // IMPORTANT: You *must* return the supabaseResponse object as it is.
-  // If you're creating a new response object with NextResponse.next() make sure to:
-  // 1. Pass the request in it, like so:
-  //    const myNewResponse = NextResponse.next({ request })
-  // 2. Copy over the cookies, like so:
-  //    myNewResponse.cookies.setAll(supabaseResponse.cookies.getAll())
-  // 3. Change the myNewResponse object to fit your needs, but avoid changing
-  //    the cookies!
-  // 4. Finally:
-  //    return myNewResponse
-  // If this is not done, you may be causing the browser and server to go out
-  // of sync and terminate the user's session prematurely!
+  // Redirect already-authenticated users away from login/register to their destination
+  if (user && isAuthGuestOnlyPath(pathname)) {
+    const nextParam = sanitizeRedirectPath(request.nextUrl.searchParams.get("next"), "/");
+    const url = request.nextUrl.clone();
+    url.pathname = nextParam;
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
 
   return supabaseResponse;
 }

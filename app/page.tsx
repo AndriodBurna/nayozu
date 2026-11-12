@@ -280,7 +280,7 @@ export default async function Home() {
             asChild
             className="rounded-xl bg-primary px-6 text-sm font-semibold text-primary-foreground hover:brightness-110 shadow-lg shadow-primary/30 transition-all"
           >
-            <Link href="/auth/sign-up">Create Account</Link>
+            <Link href="/register">Create Account</Link>
           </Button>
         </section>
       </div>

@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -15,6 +22,7 @@ import {
   KeyRound,
   Loader2,
   Lock,
+  LogOut,
   MessageSquare,
   Pause,
   Play,
@@ -42,7 +50,15 @@ import {
   type VideoEpisode,
 } from "@/lib/providers/mediaProviderAdapter";
 import {
+  deduplicateRealtimeParticipants,
+  type WatchRoomParticipantSnapshot,
+  type WatchRoomResolvedDTO,
+} from "@/lib/watch-together/roomService";
+import {
   createWatchRoomAction,
+  getWatchTogetherLobbyDataAction,
+  heartbeatWatchRoomAction,
+  leaveWatchRoomAction,
   sendWatchRoomChatAction,
   updateWatchRoomStateAction,
   verifyWatchRoomAccessAction,
@@ -69,60 +85,33 @@ export interface WatchRoomChatMessage {
   body: string;
   createdAt: string;
   author: {
+    id?: string;
     username: string;
+    displayName?: string;
     avatarUrl: string | null;
+    isPublicProfile?: boolean;
   };
 }
 
-export interface WatchRoomItem {
-  id: string;
-  isShowcase?: boolean;
-  roomTitle: string;
-  description: string | null;
-  animeExternalId: string;
-  animeSlug: string;
-  animeTitle: string;
-  animeCover: string | null;
-  episodeNumber: number;
-  totalEpisodes: number | null;
-  language: "sub" | "dub";
-  status: WatchRoomStatus;
-  privacy: WatchRoomPrivacy;
-  maxParticipants: number;
-  timerSeconds: number;
-  isPlaying: boolean;
-  timerUpdatedAt: string;
-  createdAt: string;
-  hostId: string;
-  host: {
-    username: string;
-    displayName: string;
-    avatarUrl: string | null;
-  };
-  chatMessages: WatchRoomChatMessage[];
-}
+export type WatchRoomItem = WatchRoomResolvedDTO;
 
 export interface WatchTogetherCurrentUser {
   id: string;
   username: string;
+  displayName?: string;
   avatarUrl: string | null;
-}
-
-interface PresenceParticipant {
-  presenceKey: string;
-  userId: string;
-  username: string;
-  avatarUrl: string | null;
-  role: "host" | "viewer" | "guest";
-  joinedAt: string;
+  isPublicProfile?: boolean;
 }
 
 interface WatchTogetherClientProps {
   initialRooms: WatchRoomItem[];
   animeOptions: WatchRoomAnimeOption[];
   currentUser: WatchTogetherCurrentUser | null;
+  blockedUserIds?: string[];
   loadError?: string | null;
 }
+
+const HEARTBEAT_INTERVAL_MS = 45_000;
 
 function formatClock(totalSeconds: number): string {
   const safe = Math.max(Math.floor(totalSeconds), 0);
@@ -131,20 +120,69 @@ function formatClock(totalSeconds: number): string {
   return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
+function notifyWatchRoomsUpdated() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("nayozu:watch-rooms-updated"));
+  }
+}
+
 export default function WatchTogetherClient({
   initialRooms,
   animeOptions,
   currentUser,
-  loadError,
+  blockedUserIds = [],
+  loadError: initialLoadError = null,
 }: WatchTogetherClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const roomParam = searchParams.get("room") ?? "";
 
   const [rooms, setRooms] = useState<WatchRoomItem[]>(initialRooms);
+  const [lobbyLoading, setLobbyLoading] = useState<boolean>(false);
+  const [lobbyError, setLobbyError] = useState<string | null>(initialLoadError);
+  const [joinBannerError, setJoinBannerError] = useState<string | null>(null);
+  const [joiningRoomId, setJoiningRoomId] = useState<string | null>(null);
+
   useEffect(() => {
     setRooms(initialRooms);
   }, [initialRooms]);
+
+  useEffect(() => {
+    setLobbyError(initialLoadError);
+  }, [initialLoadError]);
+
+  const blockedSet = useMemo(() => new Set(blockedUserIds), [blockedUserIds]);
+
+  const refreshLobbyRooms = useCallback(async () => {
+    setLobbyLoading(true);
+    setLobbyError(null);
+    try {
+      const res = await getWatchTogetherLobbyDataAction();
+      if (!res.success) {
+        setLobbyError(res.error || "Unable to refresh Watch Together rooms.");
+        return;
+      }
+      setRooms(res.rooms);
+    } catch (err) {
+      setLobbyError(
+        err instanceof Error
+          ? err.message
+          : "Unable to refresh Watch Together rooms."
+      );
+    } finally {
+      setLobbyLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onRoomsUpdated = () => {
+      void refreshLobbyRooms();
+    };
+    window.addEventListener("nayozu:watch-rooms-updated", onRoomsUpdated);
+    return () => {
+      window.removeEventListener("nayozu:watch-rooms-updated", onRoomsUpdated);
+    };
+  }, [refreshLobbyRooms]);
 
   // Landing filters
   const [searchQuery, setSearchQuery] = useState("");
@@ -171,17 +209,18 @@ export default function WatchTogetherClient({
   // Room access verification & private code gate
   const [verifiedRoomId, setVerifiedRoomId] = useState<string | null>(null);
   const [verifiedAccessCode, setVerifiedAccessCode] = useState<string>("");
-  const [pendingPrivateRoom, setPendingPrivateRoom] = useState<WatchRoomItem | null>(
-    null
-  );
+  const [pendingPrivateRoom, setPendingPrivateRoom] =
+    useState<WatchRoomItem | null>(null);
   const [enteredCode, setEnteredCode] = useState("");
   const [accessError, setAccessError] = useState<string | null>(null);
   const [verifyingAccess, setVerifyingAccess] = useState(false);
 
   // Active room live state
   const activeRoom = useMemo(
-    () => rooms.find((r) => r.id === roomParam) ?? null,
-    [rooms, roomParam]
+    () =>
+      rooms.find((r) => r.id === roomParam && !blockedSet.has(r.hostId)) ??
+      null,
+    [rooms, roomParam, blockedSet]
   );
 
   const [roomEpisode, setRoomEpisode] = useState<number>(1);
@@ -196,7 +235,9 @@ export default function WatchTogetherClient({
   const [realtimeStatus, setRealtimeStatus] = useState<
     "connecting" | "connected" | "disconnected"
   >("disconnected");
-  const [participants, setParticipants] = useState<PresenceParticipant[]>([]);
+  const [participants, setParticipants] = useState<
+    WatchRoomParticipantSnapshot[]
+  >([]);
   const [sideTab, setSideTab] = useState<"chat" | "participants">("chat");
   const [chatMessages, setChatMessages] = useState<WatchRoomChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
@@ -205,9 +246,14 @@ export default function WatchTogetherClient({
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const channelRef = useRef<any>(null);
+  const participantsRef = useRef<WatchRoomParticipantSnapshot[]>([]);
   const guestSessionIdRef = useRef<string>(
     `guest_${Math.random().toString(36).slice(2, 8)}`
   );
+
+  useEffect(() => {
+    participantsRef.current = participants;
+  }, [participants]);
 
   // Sync local state when activeRoom changes
   useEffect(() => {
@@ -224,6 +270,7 @@ export default function WatchTogetherClient({
     setTimerSeconds(activeRoom.timerSeconds);
     setTimerPlaying(activeRoom.isPlaying);
     setChatMessages(activeRoom.chatMessages);
+    setParticipants(activeRoom.participants ?? []);
     setHostActionError(null);
     setChatError(null);
 
@@ -231,7 +278,7 @@ export default function WatchTogetherClient({
     if (verifiedRoomId === activeRoom.id) return;
 
     const isHost = Boolean(currentUser && currentUser.id === activeRoom.hostId);
-    if (activeRoom.privacy === "private" && !isHost && !activeRoom.isShowcase) {
+    if (activeRoom.privacy === "private" && !isHost) {
       setPendingPrivateRoom(activeRoom);
       return;
     }
@@ -245,12 +292,16 @@ export default function WatchTogetherClient({
         if (res.authorized) {
           setVerifiedRoomId(activeRoom.id);
           setPendingPrivateRoom(null);
+          notifyWatchRoomsUpdated();
         } else {
           setAccessError(res.error || "Unable to join this room.");
+          void refreshLobbyRooms();
         }
       })
       .catch(() => {
-        if (!cancelled) setAccessError("Failed to verify room access with server.");
+        if (!cancelled) {
+          setAccessError("Failed to verify room access with server.");
+        }
       })
       .finally(() => {
         if (!cancelled) setVerifyingAccess(false);
@@ -259,28 +310,38 @@ export default function WatchTogetherClient({
     return () => {
       cancelled = true;
     };
-  }, [activeRoom, currentUser, verifiedRoomId]);
+  }, [activeRoom, currentUser, verifiedRoomId, refreshLobbyRooms]);
+
+  const activeRoomId = activeRoom?.id ?? null;
+  const activeRoomHostId = activeRoom?.hostId ?? "";
+  const activeRoomMaxParticipants = activeRoom?.maxParticipants ?? 8;
 
   // Connect to Supabase Realtime Presence + Broadcast when inside a verified room
   useEffect(() => {
-    if (!activeRoom || verifiedRoomId !== activeRoom.id) {
+    if (!activeRoomId || verifiedRoomId !== activeRoomId) {
       return;
     }
+
+    let isMounted = true;
+    const roomId = activeRoomId;
+    const hostId = activeRoomHostId;
+    const maxCap = activeRoomMaxParticipants;
+    const isHost = Boolean(currentUser && currentUser.id === hostId);
 
     const supabase = createClient();
     const myKey = currentUser?.id ?? guestSessionIdRef.current;
     const myUsername =
       currentUser?.username ?? `Guest_${guestSessionIdRef.current.slice(-4)}`;
-    const myRole: "host" | "viewer" | "guest" =
-      currentUser && currentUser.id === activeRoom.hostId
-        ? "host"
-        : currentUser
-          ? "viewer"
-          : "guest";
+    const myDisplayName = currentUser?.displayName || myUsername;
+    const myRole: "host" | "viewer" | "guest" = isHost
+      ? "host"
+      : currentUser
+        ? "viewer"
+        : "guest";
 
     setRealtimeStatus("connecting");
 
-    const channel = supabase.channel(`watch-room:${activeRoom.id}`, {
+    const channel = supabase.channel(`watch-room:${roomId}`, {
       config: {
         presence: { key: myKey },
         broadcast: { self: false },
@@ -290,66 +351,111 @@ export default function WatchTogetherClient({
     channelRef.current = channel;
 
     const syncPresence = () => {
-      const state = channel.presenceState();
-      const list: PresenceParticipant[] = [];
-      for (const [key, entries] of Object.entries(state)) {
-        const first = Array.isArray(entries) ? entries[0] : null;
-        if (!first) continue;
-        const meta = first as Record<string, unknown>;
-        list.push({
-          presenceKey: key,
-          userId: String(meta.userId || key),
-          username: String(meta.username || "Viewer"),
-          avatarUrl: meta.avatarUrl ? String(meta.avatarUrl) : null,
-          role:
-            meta.role === "host"
-              ? "host"
-              : meta.role === "viewer"
-                ? "viewer"
-                : "guest",
-          joinedAt: String(meta.joinedAt || new Date().toISOString()),
+      if (!isMounted) return;
+      const state = channel.presenceState() as Record<
+        string,
+        Array<Record<string, unknown>>
+      >;
+      const deduped = deduplicateRealtimeParticipants(state, {
+        hostId,
+        maxParticipants: maxCap,
+        blockedSet,
+      });
+      setParticipants(deduped);
+
+      // Update local rooms array so participantCount stays accurate in memory
+      if (deduped.length > 0) {
+        setRooms((prev) =>
+          prev.map((r) =>
+            r.id === roomId
+              ? {
+                  ...r,
+                  participants: deduped,
+                  participantCount: Math.min(deduped.length, r.maxParticipants),
+                  isFull: deduped.length >= r.maxParticipants,
+                  isJoinable: deduped.length < r.maxParticipants,
+                  lifecycleState:
+                    deduped.length >= r.maxParticipants ? "full" : "active",
+                }
+              : r
+          )
+        );
+      }
+
+      if (isHost && deduped.length > 0) {
+        void heartbeatWatchRoomAction({
+          roomId,
+          activeParticipants: deduped,
+        }).then(() => {
+          notifyWatchRoomsUpdated();
         });
       }
-      setParticipants(list);
     };
 
     channel
       .on("presence", { event: "sync" }, syncPresence)
-      .on("Broadcast" as "broadcast", { event: "playback_sync" }, ({ payload }) => {
-        if (!payload || typeof payload !== "object") return;
-        const data = payload as {
-          episodeNumber?: number;
-          language?: "sub" | "dub";
-          status?: WatchRoomStatus;
-          timerSeconds?: number;
-          isPlaying?: boolean;
-        };
-        if (typeof data.episodeNumber === "number") setRoomEpisode(data.episodeNumber);
-        if (data.language === "sub" || data.language === "dub") {
-          setRoomLanguage(data.language);
+      .on("presence", { event: "join" }, syncPresence)
+      .on("presence", { event: "leave" }, syncPresence)
+      .on(
+        "Broadcast" as "broadcast",
+        { event: "playback_sync" },
+        ({ payload }) => {
+          if (!isMounted || !payload || typeof payload !== "object") return;
+          const data = payload as {
+            episodeNumber?: number;
+            language?: "sub" | "dub";
+            status?: WatchRoomStatus;
+            timerSeconds?: number;
+            isPlaying?: boolean;
+          };
+          if (typeof data.episodeNumber === "number") {
+            setRoomEpisode(data.episodeNumber);
+          }
+          if (data.language === "sub" || data.language === "dub") {
+            setRoomLanguage(data.language);
+          }
+          if (data.status) {
+            setRoomStatus(data.status);
+            if (data.status === "ended") {
+              setTimerPlaying(false);
+              setRooms((prev) => prev.filter((r) => r.id !== roomId));
+              notifyWatchRoomsUpdated();
+            }
+          }
+          if (typeof data.timerSeconds === "number") {
+            setTimerSeconds(data.timerSeconds);
+          }
+          if (typeof data.isPlaying === "boolean") {
+            setTimerPlaying(data.isPlaying);
+          }
         }
-        if (data.status) setRoomStatus(data.status);
-        if (typeof data.timerSeconds === "number") setTimerSeconds(data.timerSeconds);
-        if (typeof data.isPlaying === "boolean") setTimerPlaying(data.isPlaying);
-      })
+      )
       .on("Broadcast" as "broadcast", { event: "room_chat" }, ({ payload }) => {
-        if (!payload || typeof payload !== "object") return;
+        if (!isMounted || !payload || typeof payload !== "object") return;
         const msg = payload as WatchRoomChatMessage;
         if (!msg.id || !msg.body) return;
+        if (msg.author?.id && blockedSet.has(msg.author.id)) return;
         setChatMessages((prev) =>
           prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]
         );
       })
       .subscribe(async (status) => {
+        if (!isMounted) return;
         if (status === "SUBSCRIBED") {
           setRealtimeStatus("connected");
-          await channel.track({
-            userId: myKey,
-            username: myUsername,
-            avatarUrl: currentUser?.avatarUrl ?? null,
-            role: myRole,
-            joinedAt: new Date().toISOString(),
-          });
+          try {
+            await channel.track({
+              userId: myKey,
+              username: myUsername,
+              displayName: myDisplayName,
+              avatarUrl: currentUser?.avatarUrl ?? null,
+              isPublicProfile: currentUser?.isPublicProfile === true,
+              role: myRole,
+              joinedAt: new Date().toISOString(),
+            });
+          } catch {
+            /* ignore track error */
+          }
         } else if (
           status === "CHANNEL_ERROR" ||
           status === "TIMED_OUT" ||
@@ -359,11 +465,35 @@ export default function WatchTogetherClient({
         }
       });
 
+    // Periodic server heartbeat while connected to the room
+    const heartbeatTimer = window.setInterval(() => {
+      if (!currentUser) return;
+      void heartbeatWatchRoomAction({
+        roomId,
+        activeParticipants: isHost ? participantsRef.current : undefined,
+      });
+    }, HEARTBEAT_INTERVAL_MS);
+
     return () => {
+      isMounted = false;
+      window.clearInterval(heartbeatTimer);
       channelRef.current = null;
-      supabase.removeChannel(channel);
+      void channel.untrack().catch(() => {});
+      void supabase.removeChannel(channel);
+      if (currentUser) {
+        void leaveWatchRoomAction({ roomId }).then(() => {
+          notifyWatchRoomsUpdated();
+        });
+      }
     };
-  }, [activeRoom, verifiedRoomId, currentUser]);
+  }, [
+    activeRoomId,
+    activeRoomHostId,
+    activeRoomMaxParticipants,
+    verifiedRoomId,
+    currentUser,
+    blockedSet,
+  ]);
 
   // Shared watch timer tick when timerPlaying is true
   useEffect(() => {
@@ -374,12 +504,13 @@ export default function WatchTogetherClient({
     return () => clearInterval(interval);
   }, [timerPlaying, roomStatus]);
 
-  // Filtered rooms for the landing page
+  // Filtered rooms for the landing page (excludes ended, stale, and blocked hosts)
   const filteredRooms = useMemo(() => {
     return rooms.filter((r) => {
-      if (r.status === "ended") return false;
+      if (blockedSet.has(r.hostId)) return false;
       if (statusFilter === "live" && r.status !== "live") return false;
-      if (statusFilter === "intermission" && r.status !== "intermission") return false;
+      if (statusFilter === "intermission" && r.status !== "intermission")
+        return false;
       if (statusFilter === "public" && r.privacy !== "public") return false;
       if (statusFilter === "private" && r.privacy !== "private") return false;
 
@@ -392,7 +523,7 @@ export default function WatchTogetherClient({
       }
       return true;
     });
-  }, [rooms, statusFilter, searchQuery]);
+  }, [rooms, statusFilter, searchQuery, blockedSet]);
 
   const selectedAnimeForCreate = useMemo(
     () => animeOptions.find((a) => a.externalId === selectedAnimeId) ?? null,
@@ -400,18 +531,50 @@ export default function WatchTogetherClient({
   );
 
   // Handlers
-  const handleSelectRoom = (room: WatchRoomItem) => {
+  const handleSelectRoom = async (room: WatchRoomItem) => {
     setAccessError(null);
+    setJoinBannerError(null);
+
     const isHost = Boolean(currentUser && currentUser.id === room.hostId);
-    if (room.privacy === "private" && !isHost && !room.isShowcase) {
+    if (room.privacy === "private" && !isHost) {
       setPendingPrivateRoom(room);
       setEnteredCode("");
       return;
     }
-    setVerifiedRoomId(room.id);
-    router.push(`/watch-together?room=${encodeURIComponent(room.id)}`, {
-      scroll: false,
-    });
+
+    setJoiningRoomId(room.id);
+    try {
+      const res = await verifyWatchRoomAccessAction({ roomId: room.id });
+      if (!res.authorized) {
+        setJoinBannerError(
+          res.error || "This Watch Together room is no longer available."
+        );
+        void refreshLobbyRooms();
+        notifyWatchRoomsUpdated();
+        return;
+      }
+
+      setVerifiedRoomId(room.id);
+      notifyWatchRoomsUpdated();
+      router.push(`/watch-together?room=${encodeURIComponent(room.id)}`, {
+        scroll: false,
+      });
+    } catch {
+      setJoinBannerError("Could not join room right now. Please try again.");
+    } finally {
+      setJoiningRoomId(null);
+    }
+  };
+
+  const handleLeaveRoom = async () => {
+    if (activeRoom) {
+      const leavingId = activeRoom.id;
+      setVerifiedRoomId(null);
+      await leaveWatchRoomAction({ roomId: leavingId });
+      notifyWatchRoomsUpdated();
+    }
+    router.push("/watch-together");
+    void refreshLobbyRooms();
   };
 
   const handleSubmitPrivateCode = async (e: React.FormEvent) => {
@@ -430,6 +593,7 @@ export default function WatchTogetherClient({
         setVerifiedAccessCode(enteredCode);
         const targetId = pendingPrivateRoom.id;
         setPendingPrivateRoom(null);
+        notifyWatchRoomsUpdated();
         router.push(`/watch-together?room=${encodeURIComponent(targetId)}`, {
           scroll: false,
         });
@@ -453,7 +617,7 @@ export default function WatchTogetherClient({
         r.id.toLowerCase().startsWith(trimmed.toLowerCase())
     );
     if (found) {
-      handleSelectRoom(found);
+      void handleSelectRoom(found);
     } else {
       router.push(`/watch-together?room=${encodeURIComponent(trimmed)}`, {
         scroll: false,
@@ -494,6 +658,7 @@ export default function WatchTogetherClient({
       if (newPrivacy === "private") {
         setVerifiedAccessCode(newAccessCode);
       }
+      notifyWatchRoomsUpdated();
       router.push(`/watch-together?room=${encodeURIComponent(result.roomId)}`);
       router.refresh();
     });
@@ -535,10 +700,6 @@ export default function WatchTogetherClient({
       });
     }
 
-    if (activeRoom.isShowcase) {
-      return;
-    }
-
     startUpdateTransition(async () => {
       const res = await updateWatchRoomStateAction({
         roomId: activeRoom.id,
@@ -550,9 +711,13 @@ export default function WatchTogetherClient({
       });
       if (!res.success) {
         setHostActionError(res.error || "Failed to persist room state.");
-      } else if (nextStatus === "ended") {
-        router.push("/watch-together");
-        router.refresh();
+      } else {
+        notifyWatchRoomsUpdated();
+        if (nextStatus === "ended") {
+          setRooms((prev) => prev.filter((r) => r.id !== activeRoom.id));
+          router.push("/watch-together");
+          router.refresh();
+        }
       }
     });
   };
@@ -596,7 +761,8 @@ export default function WatchTogetherClient({
   const activeAnimeMeta = useMemo(() => {
     if (!activeRoom) return null;
     return (
-      animeOptions.find((a) => a.externalId === activeRoom.animeExternalId) ?? null
+      animeOptions.find((a) => a.externalId === activeRoom.animeExternalId) ??
+      null
     );
   }, [activeRoom, animeOptions]);
 
@@ -643,15 +809,44 @@ export default function WatchTogetherClient({
         <div className="rounded-2xl border border-[#1e253d] bg-[#121625] p-8 text-center space-y-4">
           <AlertCircle className="mx-auto h-10 w-10 text-amber-400" />
           <div className="space-y-1">
-            <h1 className="text-xl font-bold text-white">Watch Room Not Found</h1>
+            <h1 className="text-xl font-bold text-white">
+              Watch Room Not Found or Ended
+            </h1>
             <p className="text-sm text-zinc-400">
-              Room <code className="text-zinc-200">{roomParam}</code> does not exist
-              or has already ended.
+              Room <code className="text-zinc-200">{roomParam}</code> does not
+              exist, has expired due to inactivity, or has already ended.
             </p>
           </div>
-          <Button asChild className="rounded-xl bg-primary text-primary-foreground">
+          <Button
+            asChild
+            className="rounded-xl bg-primary text-primary-foreground"
+          >
             <Link href="/watch-together">
               <ArrowLeft className="mr-2 h-4 w-4" /> Back to Watch Together Lobby
+            </Link>
+          </Button>
+        </div>
+      );
+    }
+
+    if (roomStatus === "ended") {
+      return (
+        <div className="rounded-2xl border border-[#1e253d] bg-[#121625] p-8 text-center space-y-4">
+          <AlertCircle className="mx-auto h-10 w-10 text-amber-400" />
+          <div className="space-y-1">
+            <h1 className="text-xl font-bold text-white">
+              Watch Together Session Ended
+            </h1>
+            <p className="text-sm text-zinc-400">
+              The host has ended <strong>{activeRoom.roomTitle}</strong>.
+            </p>
+          </div>
+          <Button
+            asChild
+            className="rounded-xl bg-primary text-primary-foreground"
+          >
+            <Link href="/watch-together">
+              <ArrowLeft className="mr-2 h-4 w-4" /> Return to Lobby
             </Link>
           </Button>
         </div>
@@ -663,7 +858,7 @@ export default function WatchTogetherClient({
         <div className="flex flex-col items-center justify-center rounded-2xl border border-[#1e253d] bg-[#121625] py-20 gap-3">
           <Loader2 className="h-7 w-7 animate-spin text-primary" />
           <p className="text-sm text-zinc-300">
-            Validating room permissions on server...
+            Validating room permissions and capacity on server...
           </p>
         </div>
       );
@@ -677,7 +872,9 @@ export default function WatchTogetherClient({
               <Lock className="h-5 w-5" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-white">Private Watch Room</h1>
+              <h1 className="text-lg font-bold text-white">
+                Private Watch Room
+              </h1>
               <p className="text-xs text-zinc-400">
                 Hosted by @{activeRoom.host.username}
               </p>
@@ -685,8 +882,8 @@ export default function WatchTogetherClient({
           </div>
 
           <p className="text-sm text-zinc-300">
-            <strong>{activeRoom.roomTitle}</strong> requires an invite code to enter.
-            Access is verified on the server.
+            <strong>{activeRoom.roomTitle}</strong> requires an invite code to
+            enter. Access and room capacity are verified on the server.
           </p>
 
           <form onSubmit={handleSubmitPrivateCode} className="space-y-3">
@@ -741,30 +938,36 @@ export default function WatchTogetherClient({
     }
 
     const isHost = Boolean(currentUser && currentUser.id === activeRoom.hostId);
-    const liveViewerCount = Math.max(participants.length, 1);
+    const displayedParticipants =
+      participants.length > 0 ? participants : activeRoom.participants ?? [];
+    const liveViewerCount = Math.min(
+      Math.max(
+        displayedParticipants.length,
+        activeRoom.participantCount || 1,
+        1
+      ),
+      activeRoom.maxParticipants
+    );
     const isMultiViewerSynced =
-      realtimeStatus === "connected" && participants.length >= 2;
+      realtimeStatus === "connected" && displayedParticipants.length >= 2;
 
     return (
       <div className="space-y-6 pb-10">
         {/* Top Room Navigation & Status Bar */}
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#1b2238] bg-[#121624] px-4 py-3">
           <div className="flex flex-wrap items-center gap-3">
-            <Button asChild variant="ghost" size="sm" className="text-zinc-300">
-              <Link href="/watch-together">
-                <ArrowLeft className="mr-1.5 h-4 w-4" /> Lobby
-              </Link>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => void handleLeaveRoom()}
+              className="text-zinc-300"
+            >
+              <LogOut className="mr-1.5 h-4 w-4" /> Leave Room
             </Button>
             <div className="h-4 w-px bg-white/10 hidden sm:block" />
             <div className="flex flex-wrap items-center gap-2">
-              {activeRoom.isShowcase ? (
-                <Badge
-                  variant="outline"
-                  className="border-amber-500/40 bg-amber-500/10 text-amber-400"
-                >
-                  Showcase Preview Room
-                </Badge>
-              ) : roomStatus === "live" ? (
+              {roomStatus === "live" ? (
                 <Badge className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
                   <Radio className="mr-1 h-3 w-3 animate-pulse" /> Live Room
                 </Badge>
@@ -794,27 +997,31 @@ export default function WatchTogetherClient({
             {realtimeStatus === "connected" ? (
               <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 font-medium text-emerald-400">
                 <Wifi className="h-3.5 w-3.5" />
-                Realtime Connected ({liveViewerCount}/{activeRoom.maxParticipants} in
-                room)
+                Realtime Connected ({liveViewerCount}/
+                {activeRoom.maxParticipants} in room)
               </span>
             ) : realtimeStatus === "connecting" ? (
               <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 font-medium text-amber-400">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Connecting to room channel...
+                Connecting to room channel ({liveViewerCount}/
+                {activeRoom.maxParticipants})...
               </span>
             ) : (
               <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-700 bg-zinc-800/80 px-3 py-1 font-medium text-zinc-400">
                 <WifiOff className="h-3.5 w-3.5" />
-                Local Playback Only (Realtime Offline)
+                Local Playback ({liveViewerCount}/{activeRoom.maxParticipants}{" "}
+                recorded)
               </span>
             )}
 
-            <Link
-              href={`/anime/${activeRoom.animeSlug}`}
-              className="inline-flex items-center gap-1 text-zinc-400 hover:text-primary transition-colors"
-            >
-              Title Page <ExternalLink className="h-3.5 w-3.5" />
-            </Link>
+            {activeRoom.animeSlug && (
+              <Link
+                href={`/anime/${activeRoom.animeSlug}`}
+                className="inline-flex items-center gap-1 text-zinc-400 hover:text-primary transition-colors"
+              >
+                Title Page <ExternalLink className="h-3.5 w-3.5" />
+              </Link>
+            )}
           </div>
         </div>
 
@@ -827,11 +1034,26 @@ export default function WatchTogetherClient({
               </h1>
               <p className="text-xs md:text-sm text-zinc-400">
                 Watching{" "}
-                <strong className="text-zinc-200">{activeRoom.animeTitle}</strong> ·
-                Episode {roomEpisode} ({roomLanguage.toUpperCase()}) · Hosted by{" "}
-                <span className="text-primary font-semibold">
-                  @{activeRoom.host.username}
-                </span>
+                <strong className="text-zinc-200">
+                  {activeRoom.animeTitle}
+                </strong>{" "}
+                · Episode {roomEpisode}
+                {activeRoom.totalEpisodes
+                  ? ` of ${activeRoom.totalEpisodes}`
+                  : ""}{" "}
+                ({roomLanguage.toUpperCase()}) · Hosted by{" "}
+                {activeRoom.host.isPublicProfile ? (
+                  <Link
+                    href={`/u/${encodeURIComponent(activeRoom.host.username)}`}
+                    className="text-primary font-semibold hover:underline"
+                  >
+                    @{activeRoom.host.username}
+                  </Link>
+                ) : (
+                  <span className="text-primary font-semibold">
+                    @{activeRoom.host.username}
+                  </span>
+                )}
               </p>
               {activeRoom.description && (
                 <p className="text-xs text-zinc-400 pt-0.5">
@@ -860,7 +1082,7 @@ export default function WatchTogetherClient({
                 </div>
               </div>
 
-              {(isHost || activeRoom.isShowcase) && (
+              {isHost && (
                 <div className="flex items-center gap-1.5 border-l border-white/10 pl-3">
                   <Button
                     type="button"
@@ -910,40 +1132,44 @@ export default function WatchTogetherClient({
               <span>
                 {isMultiViewerSynced ? (
                   <>
-                    <strong>Room Episode & Shared Timer Synced:</strong> Connected with{" "}
-                    {liveViewerCount} viewers via Supabase Realtime. Video streams load
-                    independently per viewer to respect media-provider restrictions —
-                    align your player with the Shared Room Timer (
-                    <code className="text-primary">{formatClock(timerSeconds)}</code>).
+                    <strong>Room Episode &amp; Shared Timer Synced:</strong>{" "}
+                    Connected with {liveViewerCount} active participants via
+                    Supabase Realtime. Video streams load independently per
+                    viewer to respect media-provider restrictions — align your
+                    player with the Shared Room Timer (
+                    <code className="text-primary">
+                      {formatClock(timerSeconds)}
+                    </code>
+                    ).
                   </>
                 ) : realtimeStatus === "connected" ? (
                   <>
-                    <strong>Realtime Channel Ready (1 viewer in room):</strong> Share
-                    this room link so others can join. Video players resolve streams
-                    independently per viewer; episode selection, chat, and the shared
-                    timer broadcast in real time when peers join.
+                    <strong>
+                      Realtime Channel Ready ({liveViewerCount} participant in
+                      room):
+                    </strong>{" "}
+                    Share this room link so others can join. Video players
+                    resolve streams independently per viewer; episode selection,
+                    chat, and the shared timer broadcast in real time when peers
+                    join.
                   </>
                 ) : (
                   <>
-                    <strong>Independent Playback Mode:</strong> Video streams are not
-                    frame-locked across browsers. Use the Shared Room Timer to
-                    coordinate playback.
+                    <strong>Independent Playback Mode:</strong> Video streams
+                    are not frame-locked across browsers. Use the Shared Room
+                    Timer to coordinate playback.
                   </>
                 )}
               </span>
             </div>
           </div>
 
-          {/* Host Controls Bar (Only for Room Host on User-Created Rooms, or Local Preview Controls on Showcase) */}
-          {(isHost || activeRoom.isShowcase) && (
+          {/* Host Controls Bar (Strictly Server-Verified Host Only) */}
+          {isHost && (
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-3">
               <div className="flex items-center gap-2 text-xs font-semibold text-zinc-300">
                 <Crown className="h-4 w-4 text-amber-400" />
-                <span>
-                  {isHost
-                    ? "Host Room Controls (Server-Verified)"
-                    : "Showcase Preview Controls (Local / Broadcast Only)"}
-                </span>
+                <span>Host Room Controls (Server-Verified)</span>
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
@@ -1020,23 +1246,21 @@ export default function WatchTogetherClient({
                   {roomStatus === "live" ? "Set Intermission" : "Resume Live"}
                 </Button>
 
-                {isHost && !activeRoom.isShowcase && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="destructive"
-                    disabled={isUpdatingRoom}
-                    onClick={() =>
-                      broadcastAndPersistHostState({
-                        status: "ended",
-                        isPlaying: false,
-                      })
-                    }
-                    className="h-7 text-xs"
-                  >
-                    End Room
-                  </Button>
-                )}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="destructive"
+                  disabled={isUpdatingRoom}
+                  onClick={() =>
+                    broadcastAndPersistHostState({
+                      status: "ended",
+                      isPlaying: false,
+                    })
+                  }
+                  className="h-7 text-xs"
+                >
+                  End Room
+                </Button>
               </div>
             </div>
           )}
@@ -1090,7 +1314,7 @@ export default function WatchTogetherClient({
                 }`}
               >
                 <Users className="h-3.5 w-3.5" />
-                Participants ({liveViewerCount})
+                Participants ({liveViewerCount}/{activeRoom.maxParticipants})
               </button>
             </div>
 
@@ -1099,14 +1323,35 @@ export default function WatchTogetherClient({
                 {/* Room Host Card */}
                 <div className="rounded-xl border border-[#232b45] bg-[#0e1220] p-3 flex items-center justify-between">
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/20 text-xs font-bold text-primary">
-                      {activeRoom.host.username.slice(0, 2).toUpperCase()}
+                    <div className="relative flex h-8 w-8 shrink-0 overflow-hidden items-center justify-center rounded-full bg-primary/20 text-xs font-bold text-primary">
+                      {activeRoom.host.avatarUrl ? (
+                        <Image
+                          src={activeRoom.host.avatarUrl}
+                          alt={activeRoom.host.username}
+                          fill
+                          sizes="32px"
+                          className="object-cover"
+                        />
+                      ) : (
+                        <span>
+                          {activeRoom.host.username.slice(0, 2).toUpperCase()}
+                        </span>
+                      )}
                     </div>
                     <div className="min-w-0">
-                      <p className="truncate text-xs font-semibold text-white">
-                        @{activeRoom.host.username}
-                      </p>
-                      <p className="text-[11px] text-zinc-400">Room Creator</p>
+                      {activeRoom.host.isPublicProfile ? (
+                        <Link
+                          href={`/u/${encodeURIComponent(activeRoom.host.username)}`}
+                          className="block truncate text-xs font-semibold text-white hover:text-primary"
+                        >
+                          @{activeRoom.host.username}
+                        </Link>
+                      ) : (
+                        <p className="truncate text-xs font-semibold text-white">
+                          @{activeRoom.host.username}
+                        </p>
+                      )}
+                      <p className="text-[11px] text-zinc-400">Room Host</p>
                     </div>
                   </div>
                   <Badge className="bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px]">
@@ -1116,26 +1361,36 @@ export default function WatchTogetherClient({
 
                 <div className="pt-1">
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
-                    Connected in Realtime ({participants.length})
+                    Active Participants ({liveViewerCount}/
+                    {activeRoom.maxParticipants})
                   </p>
-                  {participants.length === 0 ? (
+                  {displayedParticipants.length === 0 ? (
                     <p className="text-xs text-zinc-500 py-4 text-center">
                       {realtimeStatus === "connected"
                         ? "Synchronizing participant presence..."
-                        : "Realtime presence unavailable."}
+                        : "Participant list temporarily unavailable."}
                     </p>
                   ) : (
                     <div className="space-y-2">
-                      {participants.map((p) => (
+                      {displayedParticipants.map((p) => (
                         <div
-                          key={p.presenceKey}
+                          key={p.key}
                           className="flex items-center justify-between rounded-xl border border-[#1b2238] bg-[#151a2c] px-3 py-2"
                         >
                           <div className="flex items-center gap-2.5 min-w-0">
                             <span className="h-2 w-2 rounded-full bg-emerald-400 shrink-0" />
-                            <span className="truncate text-xs font-medium text-white">
-                              {p.username}
-                            </span>
+                            {p.isPublicProfile && p.userId ? (
+                              <Link
+                                href={`/u/${encodeURIComponent(p.username)}`}
+                                className="truncate text-xs font-medium text-white hover:text-primary"
+                              >
+                                {p.displayName || p.username}
+                              </Link>
+                            ) : (
+                              <span className="truncate text-xs font-medium text-white">
+                                {p.displayName || p.username}
+                              </span>
+                            )}
                           </div>
                           <span className="text-[10px] uppercase tracking-wider text-zinc-400">
                             {p.role}
@@ -1154,7 +1409,8 @@ export default function WatchTogetherClient({
                     <div className="flex h-full flex-col items-center justify-center text-center px-4 space-y-2">
                       <MessageSquare className="h-7 w-7 text-zinc-600" />
                       <p className="text-xs text-zinc-400">
-                        No chat messages in this room yet. Start the conversation!
+                        No chat messages in this room yet. Start the
+                        conversation!
                       </p>
                     </div>
                   ) : (
@@ -1184,14 +1440,7 @@ export default function WatchTogetherClient({
 
                 {/* Chat Composer / Honest Auth Gate */}
                 <div className="border-t border-[#1e253d] bg-[#0e1220] p-3">
-                  {activeRoom.isShowcase ? (
-                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-2.5 text-center space-y-1.5">
-                      <p className="text-[11px] text-amber-300">
-                        This is a Showcase Preview room. Create or join a user-hosted
-                        room for persistent database chat.
-                      </p>
-                    </div>
-                  ) : !currentUser ? (
+                  {!currentUser ? (
                     <div className="rounded-lg border border-[#232b45] bg-[#121625] p-2.5 text-center space-y-2">
                       <p className="text-xs text-zinc-300">
                         Sign in to post messages in room chat.
@@ -1201,7 +1450,11 @@ export default function WatchTogetherClient({
                         size="sm"
                         className="h-7 text-xs bg-primary text-primary-foreground"
                       >
-                        <Link href="/auth/login">Sign In</Link>
+                        <Link
+                          href={`/login?next=${encodeURIComponent(`/watch-together?room=${activeRoom.id}`)}`}
+                        >
+                          Sign In
+                        </Link>
                       </Button>
                     </div>
                   ) : (
@@ -1258,14 +1511,26 @@ export default function WatchTogetherClient({
               Watch Together with the Community
             </h1>
             <p className="text-xs md:text-sm text-zinc-300 leading-relaxed">
-              Join an active watch room or host your own session. Rooms coordinate
-              episode selection, live participant presence, a shared watch timer, and
-              room chat via Supabase Realtime while respecting media-provider playback
-              rules.
+              Join an active watch room or host your own session. Rooms
+              coordinate episode selection, live participant presence, a shared
+              watch timer, and room chat via Supabase Realtime while respecting
+              media-provider playback rules.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3 shrink-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void refreshLobbyRooms()}
+              disabled={lobbyLoading}
+              className="h-11 rounded-xl border-[#232b45] bg-[#121625] px-4 text-xs font-semibold text-zinc-200 hover:bg-[#192036] hover:text-white"
+            >
+              <RefreshCw
+                className={`mr-2 h-4 w-4 ${lobbyLoading ? "animate-spin text-primary" : ""}`}
+              />
+              Refresh Rooms
+            </Button>
             <Button
               type="button"
               onClick={() => {
@@ -1307,16 +1572,18 @@ export default function WatchTogetherClient({
                 Authentication Required to Host a Room
               </h3>
               <p className="max-w-md mx-auto text-xs text-zinc-400">
-                Room creation, host playback controls, and persistent chat require a
-                verified Nayozu account. Sign in or create an account to host your own
-                room.
+                Room creation, host playback controls, and persistent chat
+                require a verified Nayozu account. Sign in or create an account
+                to host your own room.
               </p>
               <div className="flex items-center justify-center gap-3 pt-1">
                 <Button asChild className="bg-primary text-primary-foreground">
-                  <Link href="/auth/login">Sign In</Link>
+                  <Link href="/login?next=%2Fwatch-together">Sign In</Link>
                 </Button>
                 <Button asChild variant="outline">
-                  <Link href="/auth/sign-up">Create Account</Link>
+                  <Link href="/register?next=%2Fwatch-together">
+                    Create Account
+                  </Link>
                 </Button>
               </div>
             </div>
@@ -1531,52 +1798,116 @@ export default function WatchTogetherClient({
             />
           </div>
 
-          <form onSubmit={handleQuickJoin} className="flex items-center gap-1.5">
+          <form
+            onSubmit={handleQuickJoin}
+            className="flex items-center gap-1.5"
+          >
             <Input
               value={quickJoinId}
               onChange={(e) => setQuickJoinId(e.target.value)}
               placeholder="Enter Room ID..."
               className="w-36 text-xs"
             />
-            <Button type="submit" variant="outline" size="sm" className="h-9 text-xs">
+            <Button
+              type="submit"
+              variant="outline"
+              size="sm"
+              className="h-9 text-xs"
+            >
               <KeyRound className="mr-1.5 h-3.5 w-3.5" /> Join ID
             </Button>
           </form>
         </div>
       </div>
 
-      {loadError && (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-300 flex items-center justify-between">
-          <span>Could not load all persisted rooms: {loadError}</span>
+      {joinBannerError && (
+        <div
+          role="alert"
+          className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-200 flex items-center justify-between gap-3"
+        >
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-amber-400 shrink-0" />
+            <span>{joinBannerError}</span>
+          </div>
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => router.refresh()}
-            className="h-7 text-xs"
+            onClick={() => setJoinBannerError(null)}
+            className="h-7 text-xs text-amber-200 hover:text-white"
+          >
+            Dismiss
+          </Button>
+        </div>
+      )}
+
+      {lobbyError && (
+        <div
+          role="alert"
+          className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-xs text-rose-200 flex items-center justify-between"
+        >
+          <span>Could not load Watch Together rooms: {lobbyError}</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void refreshLobbyRooms()}
+            className="h-7 text-xs text-rose-200 hover:text-white"
           >
             <RefreshCw className="mr-1 h-3.5 w-3.5" /> Retry
           </Button>
         </div>
       )}
 
-      {/* Rooms Grid */}
-      {filteredRooms.length === 0 ? (
+      {/* Loading Skeletons when refreshing an empty list */}
+      {lobbyLoading && rooms.length === 0 ? (
+        <div
+          className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3"
+          aria-label="Loading Watch Together rooms"
+        >
+          {[0, 1, 2].map((idx) => (
+            <div
+              key={idx}
+              className="h-56 rounded-2xl border border-[#1c233a] bg-[#121624] p-5 animate-pulse flex flex-col justify-between"
+            >
+              <div className="space-y-4">
+                <div className="h-4 w-1/2 rounded bg-white/10" />
+                <div className="flex gap-3.5">
+                  <div className="h-24 w-16 rounded-xl bg-white/10 shrink-0" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-4 w-3/4 rounded bg-white/10" />
+                    <div className="h-3 w-1/2 rounded bg-white/5" />
+                  </div>
+                </div>
+              </div>
+              <div className="h-8 w-full rounded-xl bg-white/5" />
+            </div>
+          ))}
+        </div>
+      ) : filteredRooms.length === 0 ? (
         <div className="rounded-2xl border border-[#1b2238] bg-[#121624]/60 py-16 px-4 text-center space-y-3">
           <Tv className="mx-auto h-9 w-9 text-zinc-500" />
           <p className="text-sm font-medium text-zinc-300">
-            No Watch Together rooms match your current filter.
+            {rooms.length === 0
+              ? "No active Watch Together rooms right now."
+              : "No Watch Together rooms match your current filter."}
           </p>
-          <div className="flex items-center justify-center gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setStatusFilter("all");
-                setSearchQuery("");
-              }}
-            >
-              Reset Filters
-            </Button>
+          <p className="max-w-md mx-auto text-xs text-zinc-400">
+            {rooms.length === 0
+              ? "Start a new room to watch with the community, or check back soon for live parties."
+              : "Try clearing your search or switching room status filters."}
+          </p>
+          <div className="flex items-center justify-center gap-3 pt-1">
+            {(statusFilter !== "all" || searchQuery.trim() !== "") && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setStatusFilter("all");
+                  setSearchQuery("");
+                }}
+              >
+                Reset Filters
+              </Button>
+            )}
             <Button
               size="sm"
               onClick={() => setCreateOpen(true)}
@@ -1588,112 +1919,161 @@ export default function WatchTogetherClient({
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-          {filteredRooms.map((room) => (
-            <article
-              key={room.id}
-              className="group flex flex-col justify-between rounded-2xl border border-[#1c233a] bg-[#121624] p-5 transition-all hover:border-primary/50 hover:shadow-xl hover:shadow-primary/10"
-            >
-              <div className="space-y-4">
-                {/* Top Status Row */}
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {room.isShowcase ? (
-                      <span className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300">
-                        Showcase Room
-                      </span>
-                    ) : room.status === "live" ? (
-                      <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-400">
-                        <Radio className="h-2.5 w-2.5 animate-pulse" /> Live
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300">
-                        <Clock className="h-2.5 w-2.5" /> Intermission
-                      </span>
-                    )}
+          {filteredRooms.map((room) => {
+            const isHost = Boolean(
+              currentUser && currentUser.id === room.hostId
+            );
+            const isFull =
+              room.isFull || room.participantCount >= room.maxParticipants;
+            const joinDisabled = isFull && !isHost;
+            const isJoining = joiningRoomId === room.id;
 
-                    <span className="rounded-md bg-white/5 border border-white/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-zinc-300">
-                      Ep {room.episodeNumber} · {room.language.toUpperCase()}
+            return (
+              <article
+                key={room.id}
+                className="group flex flex-col justify-between rounded-2xl border border-[#1c233a] bg-[#121624] p-5 transition-all hover:border-primary/50 hover:shadow-xl hover:shadow-primary/10"
+              >
+                <div className="space-y-4">
+                  {/* Top Status Row */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {room.status === "live" ? (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+                          <Radio className="h-2.5 w-2.5 animate-pulse" /> Live
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300">
+                          <Clock className="h-2.5 w-2.5" /> Intermission
+                        </span>
+                      )}
+
+                      {isFull && (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-rose-500/20 border border-rose-500/40 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-rose-300">
+                          Full
+                        </span>
+                      )}
+
+                      <span className="rounded-md bg-white/5 border border-white/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-zinc-300">
+                        Ep {room.episodeNumber}
+                        {room.totalEpisodes
+                          ? `/${room.totalEpisodes}`
+                          : ""} · {room.language.toUpperCase()}
+                      </span>
+                    </div>
+
+                    <span className="inline-flex items-center gap-1 text-xs text-zinc-400">
+                      {room.privacy === "private" ? (
+                        <Lock className="h-3.5 w-3.5 text-amber-400" />
+                      ) : (
+                        <Globe className="h-3.5 w-3.5 text-zinc-500" />
+                      )}
+                      <Users className="h-3.5 w-3.5 text-primary ml-1" />
+                      <span>
+                        {room.participantCount}/{room.maxParticipants}
+                      </span>
                     </span>
                   </div>
 
-                  <span className="inline-flex items-center gap-1 text-xs text-zinc-400">
-                    {room.privacy === "private" ? (
-                      <Lock className="h-3.5 w-3.5 text-amber-400" />
-                    ) : (
-                      <Globe className="h-3.5 w-3.5 text-zinc-500" />
-                    )}
-                    <Users className="h-3.5 w-3.5 text-primary ml-1" />
-                    <span>Max {room.maxParticipants}</span>
-                  </span>
-                </div>
+                  {/* Anime Poster + Room Title */}
+                  <div className="flex gap-3.5">
+                    <div className="relative h-24 w-16 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-[#181d30] flex items-center justify-center">
+                      {room.animeCover ? (
+                        <Image
+                          src={room.animeCover}
+                          alt={room.animeTitle}
+                          fill
+                          sizes="64px"
+                          className="object-cover"
+                        />
+                      ) : (
+                        <Tv
+                          className="h-5 w-5 text-zinc-500"
+                          aria-label="No poster artwork"
+                        />
+                      )}
+                    </div>
 
-                {/* Anime Poster + Room Title */}
-                <div className="flex gap-3.5">
-                  <div className="relative h-24 w-16 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-[#181d30]">
-                    {room.animeCover ? (
-                      <Image
-                        src={room.animeCover}
-                        alt={room.animeTitle}
-                        fill
-                        sizes="64px"
-                        className="object-cover"
-                      />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-[10px] text-zinc-500">
-                        No Image
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <h3 className="line-clamp-1 text-base font-bold text-white group-hover:text-primary transition-colors">
-                      {room.roomTitle}
-                    </h3>
-                    <p className="line-clamp-1 text-xs font-medium text-primary">
-                      {room.animeTitle}
-                    </p>
-                    {room.description ? (
-                      <p className="line-clamp-2 text-xs text-zinc-400 leading-relaxed">
-                        {room.description}
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <h3 className="line-clamp-1 text-base font-bold text-white group-hover:text-primary transition-colors">
+                        {room.roomTitle}
+                      </h3>
+                      <p className="line-clamp-1 text-xs font-medium text-primary">
+                        {room.animeTitle}
                       </p>
-                    ) : (
-                      <p className="text-xs text-zinc-500">
-                        Synchronized episode & watch timer session.
+                      {room.description ? (
+                        <p className="line-clamp-2 text-xs text-zinc-400 leading-relaxed">
+                          {room.description}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-zinc-500">
+                          Synchronized episode &amp; watch timer session.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Footer: Host Info & Join Button */}
+                <div className="mt-5 flex items-center justify-between border-t border-white/5 pt-3.5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="relative flex h-7 w-7 shrink-0 overflow-hidden items-center justify-center rounded-full bg-primary/15 text-[11px] font-bold text-primary">
+                      {room.host.avatarUrl ? (
+                        <Image
+                          src={room.host.avatarUrl}
+                          alt={room.host.username}
+                          fill
+                          sizes="28px"
+                          className="object-cover"
+                        />
+                      ) : (
+                        <span>
+                          {room.host.username.slice(0, 2).toUpperCase()}
+                        </span>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-xs font-medium text-zinc-200">
+                        Hosted by{" "}
+                        {room.host.isPublicProfile ? (
+                          <Link
+                            href={`/u/${encodeURIComponent(room.host.username)}`}
+                            className="hover:text-primary"
+                          >
+                            @{room.host.username}
+                          </Link>
+                        ) : (
+                          <span>@{room.host.username}</span>
+                        )}
                       </p>
+                      <p className="text-[10px] text-zinc-500">
+                        {room.participantCount === 1
+                          ? "1 active participant"
+                          : `${room.participantCount} active participants`}
+                      </p>
+                    </div>
+                  </div>
+
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={joinDisabled || isJoining}
+                    onClick={() => void handleSelectRoom(room)}
+                    className="rounded-xl bg-primary px-4 text-xs font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50"
+                  >
+                    {isJoining ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : joinDisabled ? (
+                      "Room Full"
+                    ) : room.privacy === "private" ? (
+                      "Enter Code"
+                    ) : (
+                      "Join Room"
                     )}
-                  </div>
+                  </Button>
                 </div>
-              </div>
-
-              {/* Footer: Host Info & Join Button */}
-              <div className="mt-5 flex items-center justify-between border-t border-white/5 pt-3.5">
-                <div className="flex items-center gap-2 min-w-0">
-                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[11px] font-bold text-primary">
-                    {room.host.username.slice(0, 2).toUpperCase()}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="truncate text-xs font-medium text-zinc-200">
-                      Hosted by @{room.host.username}
-                    </p>
-                    <p className="text-[10px] text-zinc-500">
-                      {room.isShowcase
-                        ? "Always open preview room"
-                        : `${room.chatMessages.length} chat messages`}
-                    </p>
-                  </div>
-                </div>
-
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => handleSelectRoom(room)}
-                  className="rounded-xl bg-primary px-4 text-xs font-semibold text-primary-foreground hover:brightness-110"
-                >
-                  {room.privacy === "private" ? "Enter Code" : "Join Room"}
-                </Button>
-              </div>
-            </article>
-          ))}
+              </article>
+            );
+          })}
         </div>
       )}
     </div>

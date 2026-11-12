@@ -1,13 +1,21 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import {
+  createDiscussionAction,
+  createDiscussionReplyAction,
+  upsertReviewAction,
+  createMediaCommentAction,
+} from "@/lib/actions/communityActions";
 import { createClient } from "@/lib/supabase/server";
 
 export interface CreateCommunityPostInput {
   postType: "discussion" | "question" | "review";
   animeId?: string | null;
+  mediaType?: "anime" | "manga" | null;
   title?: string | null;
   body: string;
+  score?: number | null;
   isSpoiler?: boolean;
 }
 
@@ -27,64 +35,6 @@ export async function createCommunityPostAction(
     return { success: false, error: "Post content cannot be empty." };
   }
 
-  if (cleanBody.length > 4000) {
-    return {
-      success: false,
-      error: "Post content cannot exceed 4,000 characters.",
-    };
-  }
-
-  const supabase = await createClient();
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
-
-  if (authError || !user) {
-    return {
-      success: false,
-      error: "You must be signed in to publish a community post.",
-    };
-  }
-
-  // Ensure a profile row exists for the authenticated user so foreign-key joins succeed
-  const fallbackUsername =
-    (user.user_metadata?.username as string | undefined) ||
-    user.email?.split("@")[0] ||
-    `user_${user.id.slice(0, 8)}`;
-
-  await supabase.from("profiles").upsert(
-    {
-      id: user.id,
-      username: fallbackUsername,
-      display_name:
-        (user.user_metadata?.display_name as string | undefined) ||
-        fallbackUsername,
-    },
-    { onConflict: "id", ignoreDuplicates: true }
-  );
-
-  // Check if user has an active posting restriction
-  const { data: restrictions } = await supabase
-    .from("user_restrictions")
-    .select("restriction_type, expires_at")
-    .eq("user_id", user.id);
-
-  if (Array.isArray(restrictions) && restrictions.length > 0) {
-    const nowMs = Date.now();
-    const activeRestriction = restrictions.find(
-      (r) => !r.expires_at || new Date(r.expires_at).getTime() > nowMs
-    );
-    if (activeRestriction) {
-      return {
-        success: false,
-        error: "Your account is currently restricted from posting.",
-      };
-    }
-  }
-
-  const now = new Date().toISOString();
-
   if (input.postType === "review") {
     if (!rawAnimeId || rawAnimeId === "community") {
       return {
@@ -93,67 +43,52 @@ export async function createCommunityPostAction(
       };
     }
 
-    const { error } = await supabase.from("anime_reviews").insert({
-      user_id: user.id,
-      anime_id: rawAnimeId,
+    const mediaType =
+      rawAnimeId.startsWith("manga:") || input.mediaType === "manga"
+        ? "manga"
+        : "anime";
+
+    const res = await upsertReviewAction({
+      externalId: rawAnimeId,
+      mediaType,
       title: cleanTitle || null,
       body: cleanBody,
-      created_at: now,
-      updated_at: now,
+      score: input.score ?? null,
     });
-
-    if (error) {
-      return {
-        success: false,
-        error: error.message || "Failed to save review to database.",
-      };
-    }
-
-    revalidatePath("/community");
-    return { success: true };
+    return { success: res.success, error: res.error };
   }
 
-  // Discussion or Question -> stored in anime_comments
-  let finalBody = cleanBody;
-  if (input.postType === "question") {
-    const hasQuestionMark = cleanBody.includes("?") || cleanTitle.includes("?");
-    if (cleanTitle) {
-      finalBody = `[Question] ${cleanTitle}${hasQuestionMark ? "" : "?"}\n\n${cleanBody}`;
-    } else if (!cleanBody.toLowerCase().startsWith("[question]")) {
-      finalBody = `[Question] ${cleanBody}`;
-    }
-  } else if (cleanTitle) {
-    finalBody = `${cleanTitle}\n\n${cleanBody}`;
-  }
+  // Discussion or Question -> stored in public.discussions
+  const fallbackTitle =
+    cleanTitle ||
+    cleanBody
+      .split("\n")[0]
+      .slice(0, 90)
+      .trim() ||
+    (input.postType === "question" ? "Community Question" : "Community Discussion");
 
-  const targetAnimeId = rawAnimeId || "community";
-
-  const { error } = await supabase.from("anime_comments").insert({
-    user_id: user.id,
-    anime_id: targetAnimeId,
-    parent_comment_id: null,
-    body: finalBody,
-    is_spoiler: Boolean(input.isSpoiler),
-    is_hidden: false,
-    created_at: now,
-    updated_at: now,
+  const res = await createDiscussionAction({
+    title: fallbackTitle,
+    body: cleanBody,
+    category: input.postType === "question" ? "question" : "discussion",
+    mediaId: rawAnimeId && rawAnimeId !== "community" ? rawAnimeId : null,
+    mediaType:
+      rawAnimeId.startsWith("manga:") || input.mediaType === "manga"
+        ? "manga"
+        : rawAnimeId
+          ? "anime"
+          : null,
+    isSpoiler: Boolean(input.isSpoiler),
   });
 
-  if (error) {
-    return {
-      success: false,
-      error: error.message || "Failed to save discussion post to database.",
-    };
-  }
-
-  revalidatePath("/community");
-  return { success: true };
+  return { success: res.success, error: res.error };
 }
 
 export async function createCommunityReplyAction(input: {
   parentCommentId: string;
   animeId: string;
   body: string;
+  isDiscussionTable?: boolean;
 }): Promise<CreateCommunityPostResult> {
   const cleanBody = (input.body ?? "").trim();
   if (!cleanBody) {
@@ -161,37 +96,27 @@ export async function createCommunityReplyAction(input: {
   }
 
   const supabase = await createClient();
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
+  const { data: disc } = await supabase
+    .from("discussions")
+    .select("id")
+    .eq("id", input.parentCommentId)
+    .maybeSingle();
 
-  if (authError || !user) {
-    return {
-      success: false,
-      error: "You must be signed in to reply.",
-    };
+  if (disc || input.isDiscussionTable) {
+    const res = await createDiscussionReplyAction({
+      discussionId: input.parentCommentId,
+      body: cleanBody,
+    });
+    return { success: res.success, error: res.error };
   }
 
-  const now = new Date().toISOString();
-  const { error } = await supabase.from("anime_comments").insert({
-    user_id: user.id,
-    anime_id: input.animeId || "community",
-    parent_comment_id: input.parentCommentId,
+  const res = await createMediaCommentAction({
+    externalId: input.animeId || "community",
+    mediaType: input.animeId?.startsWith("manga:") ? "manga" : "anime",
+    parentCommentId: input.parentCommentId,
     body: cleanBody,
-    is_spoiler: false,
-    is_hidden: false,
-    created_at: now,
-    updated_at: now,
   });
 
-  if (error) {
-    return {
-      success: false,
-      error: error.message || "Failed to save reply.",
-    };
-  }
-
   revalidatePath("/community");
-  return { success: true };
+  return { success: res.success, error: res.error };
 }

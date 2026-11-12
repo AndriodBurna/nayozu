@@ -16,9 +16,11 @@ import {
   Heart,
   History as HistoryIcon,
   Info,
+  Library,
   Loader2,
   Lock,
   MessageSquare,
+  Minus,
   Plus,
   Search,
   Star,
@@ -39,6 +41,7 @@ import {
 import type { UserActivityHistoryItem } from "@/lib/services/userLibraryServer";
 
 export type LibraryPageMode =
+  | "library"
   | "watchlist"
   | "reading-list"
   | "history"
@@ -58,6 +61,7 @@ interface LibraryCollectionClientProps {
 }
 
 const LIBRARY_TABS = [
+  { id: "library" as const, label: "All Library", href: "/library", icon: Library },
   { id: "watchlist" as const, label: "Watchlist", href: "/watchlist", icon: Bookmark },
   {
     id: "reading-list" as const,
@@ -72,9 +76,9 @@ const LIBRARY_TABS = [
 function formatStatusLabel(status: LibraryStatus, mediaType: "anime" | "manga"): string {
   switch (status) {
     case "planned":
-      return mediaType === "manga" ? "Plan to Read" : "Plan to Watch";
+      return mediaType === "manga" ? "Planning (Plan to Read)" : "Planning (Plan to Watch)";
     case "watching":
-      return mediaType === "manga" ? "Reading" : "Watching";
+      return mediaType === "manga" ? "In Progress (Reading)" : "In Progress (Watching)";
     case "completed":
       return "Completed";
     case "on_hold":
@@ -120,6 +124,18 @@ export default function LibraryCollectionClient({
 
   const pageMeta = useMemo(() => {
     switch (mode) {
+      case "library":
+        return {
+          title: "My Library",
+          subtitle:
+            "Manage all your saved anime and manga titles across Planning, In Progress, Completed, On Hold, and Dropped.",
+          emptyTitle: "Your Library is Empty",
+          emptyDesc:
+            "Add anime or manga titles using the '+ Add Title to Library' button above or directly from any title detail page.",
+          browseHref: "/anime",
+          browseLabel: "Browse Catalog",
+          addButtonLabel: "Add Title to Library",
+        };
       case "watchlist":
         return {
           title: "My Watchlist",
@@ -171,7 +187,7 @@ export default function LibraryCollectionClient({
     }
   }, [mode]);
 
-  // Filtered & sorted entries for Watchlist / Reading List / Favorites
+  // Filtered & sorted entries for Library / Watchlist / Reading List / Favorites
   const filteredEntries = useMemo(() => {
     const list = entries.filter((item) => {
       if (statusFilter !== "all" && item.status !== statusFilter) return false;
@@ -265,7 +281,7 @@ export default function LibraryCollectionClient({
         externalId: item.externalId,
         mediaType: item.mediaType,
         status: nextStatus,
-        progress: nextProgress,
+        progress: Math.max(nextProgress, 0),
       });
       if (!res.success) {
         setActionError(res.error || "Failed to update entry.");
@@ -380,10 +396,10 @@ export default function LibraryCollectionClient({
               asChild
               className="rounded-xl bg-primary px-6 font-semibold text-primary-foreground"
             >
-              <Link href="/auth/login">Sign In</Link>
+              <Link href="/login">Sign In</Link>
             </Button>
             <Button asChild variant="outline" className="rounded-xl px-6">
-              <Link href="/auth/sign-up">Create Account</Link>
+              <Link href="/register">Create Account</Link>
             </Button>
             <Button asChild variant="ghost" className="rounded-xl text-zinc-400">
               <Link href={pageMeta.browseHref}>{pageMeta.browseLabel}</Link>
@@ -448,12 +464,15 @@ export default function LibraryCollectionClient({
                           className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs text-foreground"
                         >
                           <option value="planned">
+                            Planning (
                             {mode === "reading-list"
                               ? "Plan to Read"
                               : "Plan to Watch"}
+                            )
                           </option>
                           <option value="watching">
-                            {mode === "reading-list" ? "Reading" : "Watching"}
+                            In Progress (
+                            {mode === "reading-list" ? "Reading" : "Watching"})
                           </option>
                           <option value="completed">Completed</option>
                           <option value="on_hold">On Hold</option>
@@ -463,7 +482,7 @@ export default function LibraryCollectionClient({
 
                       <div className="space-y-1.5">
                         <label className="text-xs font-semibold text-zinc-300">
-                          {mode === "reading-list" ? "Chapters" : "Episodes"}
+                          {mode === "reading-list" ? "Chapters" : "Progress"}
                         </label>
                         <Input
                           type="number"
@@ -521,19 +540,14 @@ export default function LibraryCollectionClient({
           {/* Filter & Sort Controls */}
           <div className="flex flex-col gap-3 rounded-2xl border border-[#1b2238] bg-[#121624] p-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-wrap items-center gap-2">
-              {(mode === "watchlist" || mode === "reading-list") &&
+              {(mode === "library" ||
+                mode === "watchlist" ||
+                mode === "reading-list") &&
                 (
                   [
-                    { id: "all", label: "All Entries" },
-                    {
-                      id: "planned",
-                      label:
-                        mode === "reading-list" ? "Plan to Read" : "Plan to Watch",
-                    },
-                    {
-                      id: "watching",
-                      label: mode === "reading-list" ? "Reading" : "Watching",
-                    },
+                    { id: "all", label: "All Statuses" },
+                    { id: "planned", label: "Planning" },
+                    { id: "watching", label: "In Progress" },
                     { id: "completed", label: "Completed" },
                     { id: "on_hold", label: "On Hold" },
                     { id: "dropped", label: "Dropped" },
@@ -553,7 +567,9 @@ export default function LibraryCollectionClient({
                   </button>
                 ))}
 
-              {(mode === "history" || mode === "favorites") &&
+              {(mode === "library" ||
+                mode === "history" ||
+                mode === "favorites") &&
                 (
                   [
                     { id: "all", label: "All Media" },
@@ -634,9 +650,7 @@ export default function LibraryCollectionClient({
                 Showing your persisted episode/chapter progress updates (
                 <code>public.user_anime_library</code>), ratings (
                 <code>public.anime_ratings</code>), and reviews (
-                <code>public.anime_reviews</code>). Granular per-episode video
-                playback timestamps (second-by-second resume logs) would require an
-                additional <code>playback_history</code> database migration.
+                <code>public.anime_reviews</code>).
               </span>
             </div>
           )}
@@ -933,14 +947,18 @@ export default function LibraryCollectionClient({
                                 className="h-7 rounded-md border border-[#252d47] bg-[#0e1220] px-2 text-[11px] font-medium text-zinc-200"
                               >
                                 <option value="planned">
+                                  Planning (
                                   {entry.mediaType === "manga"
                                     ? "Plan to Read"
                                     : "Plan to Watch"}
+                                  )
                                 </option>
                                 <option value="watching">
+                                  In Progress (
                                   {entry.mediaType === "manga"
                                     ? "Reading"
                                     : "Watching"}
+                                  )
                                 </option>
                                 <option value="completed">Completed</option>
                                 <option value="on_hold">On Hold</option>
@@ -957,6 +975,23 @@ export default function LibraryCollectionClient({
                               </span>
 
                               <div className="flex items-center gap-1">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={isPending || entry.progress <= 0}
+                                  onClick={() =>
+                                    handleUpdateEntry(
+                                      entry,
+                                      entry.status,
+                                      Math.max(0, entry.progress - 1)
+                                    )
+                                  }
+                                  className="h-6 px-1.5 text-[11px]"
+                                  aria-label={`Decrease ${unitName} progress`}
+                                >
+                                  <Minus className="h-3 w-3" />
+                                </Button>
                                 <Button
                                   type="button"
                                   variant="outline"

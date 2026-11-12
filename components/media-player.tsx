@@ -16,7 +16,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { createClient } from "@/lib/supabase/client";
+import { upsertLibraryEntryAction } from "@/lib/actions/libraryActions";
 import { AUTH_ENABLED, ENABLE_ANIMESDK } from "@/lib/features";
+import { CommentList } from "@/components/comment-list";
 import {
   type VideoEpisode,
   isAllowedEmbedUrl,
@@ -375,6 +377,15 @@ export default function MediaPlayer({
     setSavingProgress(true);
     try {
       const isCompleted = newProgress >= totalEpisodes;
+      const extId = Number(animeId);
+      if (Number.isFinite(extId) && extId > 0) {
+        await upsertLibraryEntryAction({
+          externalId: extId,
+          mediaType: "anime",
+          status: isCompleted ? "completed" : "watching",
+          progress: newProgress,
+        });
+      }
       await supabase.from("user_anime_library").upsert(
         {
           user_id: userId,
@@ -564,7 +575,7 @@ export default function MediaPlayer({
               size="sm"
               onClick={async () => {
                 if (!userId) {
-                  router.push("/auth/login");
+                  router.push("/login");
                   return;
                 }
                 const isWatched = progress >= currentEpNumber;
@@ -770,6 +781,17 @@ export default function MediaPlayer({
               </Badge>
             ))}
           </div>
+        </div>
+      )}
+
+      {AUTH_ENABLED && currentEpNumber >= 1 && (
+        <div className="rounded-2xl border border-white/10 bg-[#10131c] p-4 md:p-5">
+          <CommentList
+            animeId={animeId}
+            mediaType="anime"
+            episodeNumber={currentEpNumber}
+            contextLabel={`Episode ${currentEpNumber} Discussion (${title})`}
+          />
         </div>
       )}
 

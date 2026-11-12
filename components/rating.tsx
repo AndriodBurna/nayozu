@@ -180,7 +180,7 @@ export default function Rating({ animeId, onRatingChange }: RatingProps) {
         <button
           onClick={() => {
             // Redirect to login
-            window.location.href = "/auth/login";
+            window.location.href = "/login";
           }}
           className="text-sm text-[#7047F5] hover:underline"
         >

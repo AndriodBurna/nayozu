@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { getBlockedUsersAction } from "@/lib/actions/communityActions";
 import SettingsClient from "./settings-client";
 import type {
   AccentColorId,
@@ -85,6 +86,7 @@ export default async function SettingsPage() {
     ratingsCountRes,
     reviewsCountRes,
     commentsCountRes,
+    blockedRes,
   ] = await Promise.all([
     supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
     supabase
@@ -108,6 +110,7 @@ export default async function SettingsPage() {
       .from("anime_comments")
       .select("id", { count: "exact", head: true })
       .eq("user_id", user.id),
+    getBlockedUsersAction(),
   ]);
 
   const profileRow = profileRes.data;
@@ -127,6 +130,9 @@ export default async function SettingsPage() {
       (user.user_metadata?.avatar_url as string | undefined) ||
       "",
     bio: profileRow?.bio || "",
+    profileVisibility:
+      profileRow?.profile_visibility === "private" ? "private" : "public",
+    blockedUsers: blockedRes.blockedUsers,
     createdAt: profileRow?.created_at || user.created_at || null,
     updatedAt: profileRow?.updated_at || null,
     lastSignInAt: user.last_sign_in_at || null,

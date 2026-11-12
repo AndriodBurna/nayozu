@@ -5,6 +5,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import AnimeCarousel from "@/components/anime-carousel";
 import CommentList from "@/components/comment-list";
+import { MediaReviewsSection } from "@/components/media-reviews-section";
 import ErrorState from "@/components/error";
 import MediaPlayer from "@/components/media-player";
 import MangaReader from "@/components/manga-reader";
@@ -517,7 +518,10 @@ export default async function MediaDetail({ slug, mediaType = "anime" }: MediaDe
       {AUTH_ENABLED && (
         <section className="space-y-4">
           <h2 className="text-xl font-bold">Comments</h2>
-          <CommentList animeId={String(item.external_id)} />
+          <MediaReviewsSection externalId={String(item.external_id)} mediaType={mediaType} mediaTitle={item.title} />
+          <div className="rounded-3xl border border-white/10 bg-[#10131c] p-5 md:p-6">
+            <CommentList animeId={String(item.external_id)} mediaType={mediaType} contextLabel={`General ${parentName} Comments`} />
+          </div>
         </section>
       )}
 
