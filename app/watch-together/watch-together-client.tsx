@@ -247,6 +247,7 @@ export default function WatchTogetherClient({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const channelRef = useRef<any>(null);
   const participantsRef = useRef<WatchRoomParticipantSnapshot[]>([]);
+  const realtimeSyncedRef = useRef<boolean>(false);
   const guestSessionIdRef = useRef<string>(
     `guest_${Math.random().toString(36).slice(2, 8)}`
   );
@@ -365,6 +366,7 @@ export default function WatchTogetherClient({
 
       // Update local rooms array so participantCount stays accurate in memory
       if (deduped.length > 0) {
+        realtimeSyncedRef.current = true;
         setRooms((prev) =>
           prev.map((r) =>
             r.id === roomId
@@ -382,7 +384,7 @@ export default function WatchTogetherClient({
         );
       }
 
-      if (isHost && deduped.length > 0) {
+      if (isHost && (deduped.length > 0 || realtimeSyncedRef.current)) {
         void heartbeatWatchRoomAction({
           roomId,
           activeParticipants: deduped,
@@ -461,6 +463,7 @@ export default function WatchTogetherClient({
           status === "TIMED_OUT" ||
           status === "CLOSED"
         ) {
+          realtimeSyncedRef.current = false;
           setRealtimeStatus("disconnected");
         }
       });
@@ -470,12 +473,16 @@ export default function WatchTogetherClient({
       if (!currentUser) return;
       void heartbeatWatchRoomAction({
         roomId,
-        activeParticipants: isHost ? participantsRef.current : undefined,
+        activeParticipants:
+          isHost && realtimeSyncedRef.current
+            ? participantsRef.current
+            : undefined,
       });
     }, HEARTBEAT_INTERVAL_MS);
 
     return () => {
       isMounted = false;
+      realtimeSyncedRef.current = false;
       window.clearInterval(heartbeatTimer);
       channelRef.current = null;
       void channel.untrack().catch(() => {});

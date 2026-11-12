@@ -14,6 +14,8 @@ import {
   computeActiveRoomParticipants,
   deduplicateRealtimeParticipants,
   classifyWatchRoomLifecycle,
+  pruneWatchRoomActiveParticipantsSnapshot,
+  withWatchRoomJoinLock,
   fetchSharedWatchTogetherRooms,
 } from "../lib/watch-together/roomService.ts";
 
@@ -116,6 +118,7 @@ function createMockSupabase({
         const state = {
           mode: "select",
           filters: {},
+          isNullCol: null,
           inFilter: null,
           updatePayload: null,
         };
@@ -125,6 +128,10 @@ function createMockSupabase({
           update: (payload) => {
             state.mode = "update";
             state.updatePayload = payload;
+            return builder;
+          },
+          is: (col, val) => {
+            if (val === null) state.isNullCol = col;
             return builder;
           },
           eq: (col, val) => {
@@ -144,12 +151,20 @@ function createMockSupabase({
             return builder;
           },
           order: () => builder,
-          limit: async () => ({
-            data: roomRows.filter(
+          limit: async () => {
+            let filtered = roomRows.filter(
               (r) => r.anime_id === "watch_room" && r.is_hidden === false
-            ),
-            error: null,
-          }),
+            );
+            if (state.isNullCol === "parent_comment_id") {
+              filtered = filtered.filter((r) => !r.parent_comment_id);
+            }
+            if (state.inFilter?.col === "parent_comment_id") {
+              filtered = filtered.filter((r) =>
+                state.inFilter.vals.includes(r.parent_comment_id)
+              );
+            }
+            return { data: filtered, error: null };
+          },
         };
 
         return builder;
@@ -1263,3 +1278,348 @@ test("13. Empty, loading, and error states exist in both Drawer and Lobby", () =
   assert.ok(clientSrc.includes("lobbyLoading"));
   assert.ok(clientSrc.includes("Refresh Rooms"));
 });
+
+test("14. Stage 2.1 — Guest presence reliability across host/guest disconnect and reconnect scenarios", () => {
+  const t0Ms = Date.parse("2026-11-12T12:00:00.000Z");
+  const t0Iso = new Date(t0Ms).toISOString();
+
+  // Initial room snapshot: Host + 1 Guest present at t0
+  const initialActive = pruneWatchRoomActiveParticipantsSnapshot({
+    existing: [],
+    liveRealtimeParticipants: [
+      {
+        key: "user:host-1",
+        userId: "host-1",
+        username: "host_user",
+        displayName: "Host User",
+        avatarUrl: null,
+        isPublicProfile: true,
+        role: "host",
+        lastSeenAt: t0Iso,
+      },
+      {
+        key: "guest:guest_xyz",
+        userId: null,
+        username: "Guest_xyz",
+        displayName: "Guest_xyz",
+        avatarUrl: null,
+        isPublicProfile: false,
+        role: "guest",
+        lastSeenAt: t0Iso,
+      },
+    ],
+    hostId: "host-1",
+    maxParticipants: 8,
+    nowIso: t0Iso,
+    nowMs: t0Ms,
+  });
+  assert.equal(initialActive.length, 2);
+
+  // Scenario A: Host reconnects at t0 + 60s BEFORE Realtime channel has synced (liveRealtimeParticipants: undefined).
+  // The guest's lastSeenAt MUST NOT be refreshed to t0 + 60s; it remains t0Iso so it expires on schedule.
+  const t1Ms = t0Ms + 60_000;
+  const t1Iso = new Date(t1Ms).toISOString();
+  const afterPreSyncHeartbeat = pruneWatchRoomActiveParticipantsSnapshot({
+    existing: initialActive,
+    liveRealtimeParticipants: undefined,
+    hostId: "host-1",
+    maxParticipants: 8,
+    nowIso: t1Iso,
+    nowMs: t1Ms,
+  });
+  const guestEntryAfterPreSync = afterPreSyncHeartbeat.find(
+    (p) => p.role === "guest"
+  );
+  assert.ok(guestEntryAfterPreSync);
+  assert.equal(guestEntryAfterPreSync.lastSeenAt, t0Iso);
+
+  // Scenario B: Host disconnects and guest disconnects; 3m TTL expires (t0 + 181s).
+  // Even without a live Realtime sync, pruning removes the expired guest.
+  const tExpiredMs = t0Ms + PARTICIPANT_ACTIVE_TTL_MS + 1000;
+  const tExpiredIso = new Date(tExpiredMs).toISOString();
+  const afterTtlExpiry = pruneWatchRoomActiveParticipantsSnapshot({
+    existing: afterPreSyncHeartbeat,
+    liveRealtimeParticipants: undefined,
+    hostId: "host-1",
+    maxParticipants: 8,
+    nowIso: tExpiredIso,
+    nowMs: tExpiredMs,
+  });
+  assert.equal(
+    afterTtlExpiry.some((p) => p.role === "guest"),
+    false
+  );
+
+  // Scenario C: Host returns (or is online) after guest has already disconnected.
+  // Live Realtime presence contains only [Host] -> guest is purged immediately (even before 3m TTL).
+  const afterHostRealtimeSync = pruneWatchRoomActiveParticipantsSnapshot({
+    existing: initialActive,
+    liveRealtimeParticipants: [
+      {
+        key: "user:host-1",
+        userId: "host-1",
+        username: "host_user",
+        displayName: "Host User",
+        avatarUrl: null,
+        isPublicProfile: true,
+        role: "host",
+        lastSeenAt: t1Iso,
+      },
+    ],
+    hostId: "host-1",
+    maxParticipants: 8,
+    nowIso: t1Iso,
+    nowMs: t1Ms,
+  });
+  assert.equal(afterHostRealtimeSync.length, 1);
+  assert.equal(afterHostRealtimeSync[0].userId, "host-1");
+
+  // Scenario D: Host explicitly leaves/closes the room (hostLeaving: true).
+  // Host and all guest entries are immediately stripped from the room snapshot.
+  const afterHostLeave = pruneWatchRoomActiveParticipantsSnapshot({
+    existing: initialActive,
+    hostId: "host-1",
+    maxParticipants: 8,
+    nowIso: t1Iso,
+    nowMs: t1Ms,
+    hostLeaving: true,
+  });
+  assert.equal(afterHostLeave.length, 0);
+});
+
+test("15. Stage 2.1 — Stale rooms owned by other users are excluded without unauthorized DB updates, and chat volume never crowds out top-level rooms", async () => {
+  const nowMs = Date.parse("2026-11-12T12:00:00.000Z");
+  const staleIso = new Date(nowMs - STALE_ROOM_TTL_MS - 120_000).toISOString();
+  const activeIso = new Date(nowMs - 20_000).toISOString();
+
+  // Generate 130 chat messages on the active room to verify they never crowd out top-level rooms
+  const manyChatRows = Array.from({ length: 130 }, (_, idx) => ({
+    id: `chat-msg-${idx}`,
+    anime_id: "watch_room",
+    user_id: "user-other",
+    parent_comment_id: "active-room-1",
+    is_hidden: false,
+    created_at: activeIso,
+    updated_at: activeIso,
+    body: `Chat message #${idx}`,
+  }));
+
+  const mockSupabase = createMockSupabase({
+    currentUserId: "viewer-me",
+    roomRows: [
+      // Stale room owned by ANOTHER user ("user-other")
+      {
+        id: "stale-other-user-room",
+        anime_id: "watch_room",
+        user_id: "user-other",
+        parent_comment_id: null,
+        is_hidden: false,
+        created_at: staleIso,
+        updated_at: staleIso,
+        body: makeRoomPayloadJson({
+          roomTitle: "Other User Abandoned Room",
+          animeExternalId: "52991",
+          timerUpdatedAt: staleIso,
+          lastHeartbeatAt: staleIso,
+        }),
+      },
+      // Active room with 130 chat messages
+      {
+        id: "active-room-1",
+        anime_id: "watch_room",
+        user_id: "user-other",
+        parent_comment_id: null,
+        is_hidden: false,
+        created_at: activeIso,
+        updated_at: activeIso,
+        body: makeRoomPayloadJson({
+          roomTitle: "Busy Chat Room",
+          animeExternalId: "52991",
+          timerUpdatedAt: activeIso,
+          lastHeartbeatAt: activeIso,
+        }),
+      },
+      ...manyChatRows,
+    ],
+    animeRows: [
+      {
+        external_id: 52991,
+        slug: "sousou-no-frieren",
+        title_romaji: "Sousou no Frieren",
+        title_english: "Frieren: Beyond Journey's End",
+        cover_image_url: "https://cdn.nayozu.local/frieren.jpg",
+        banner_image_url: null,
+        episodes: 28,
+        status: "FINISHED",
+        media_type: "anime",
+      },
+    ],
+    profileRows: [
+      {
+        id: "user-other",
+        username: "other_host",
+        display_name: "Other Host",
+        avatar_url: null,
+        profile_visibility: "public",
+      },
+    ],
+  });
+
+  const shared = await fetchSharedWatchTogetherRooms(mockSupabase, {
+    currentUserId: "viewer-me",
+    nowMs,
+  });
+
+  // Stale room owned by another user is excluded from both Lobby and Drawer
+  assert.equal(shared.lobbyRooms.length, 1);
+  assert.equal(shared.lobbyRooms[0].id, "active-room-1");
+  assert.equal(shared.drawerRooms.length, 1);
+  assert.equal(shared.drawerRooms[0].id, "active-room-1");
+
+  // Viewer does NOT attempt to update/hide a room owned by another user
+  assert.equal(mockSupabase.hiddenUpdates.length, 0);
+
+  //Participant count is still 1 (host only), completely unaffected by 130 chat messages
+  assert.equal(shared.lobbyRooms[0].participantCount, 1);
+});
+
+test("16. Stage 2.1 — Concurrent final-slot join enforcement and host/participant reconnect safety", async () => {
+  const nowMs = Date.parse("2026-11-12T12:00:00.000Z");
+  const roomCreatedIso = new Date(nowMs - 60_000).toISOString();
+
+  // Room has maxParticipants = 2, and Host ("host-1") is already occupying slot 1 -> only 1 slot left!
+  const payload = parseWatchRoomPayloadSync(
+    makeRoomPayloadJson({
+      maxParticipants: 2,
+      timerUpdatedAt: roomCreatedIso,
+      lastHeartbeatAt: roomCreatedIso,
+    })
+  );
+  const hostProfile = {
+    id: "host-1",
+    username: "host_user",
+    displayName: "Host User",
+    avatarUrl: null,
+    isPublicProfile: true,
+  };
+
+  // Shared in-memory presence store simulating concurrent database writes
+  const storedPresenceRows = [];
+  let writeClock = nowMs;
+
+  async function simulateVerifyAndJoin(callerUserId) {
+    return withWatchRoomJoinLock("room-cap-2", async () => {
+      // Yield to event loop to simulate async network I/O during concurrent requests
+      await new Promise((r) => setTimeout(r, 5));
+
+      const preCheck = computeActiveRoomParticipants({
+        hostId: "host-1",
+        hostProfile,
+        payload,
+        roomCreatedAt: roomCreatedIso,
+        roomUpdatedAt: roomCreatedIso,
+        presenceChildRows: storedPresenceRows,
+        nowMs,
+      });
+
+      const isHost = callerUserId === "host-1";
+      const isAlreadyActive = preCheck.activeUserIds.has(callerUserId);
+
+      if (
+        !isHost &&
+        !isAlreadyActive &&
+        preCheck.participantCount >= payload.maxParticipants
+      ) {
+        return {
+          authorized: false,
+          participantCount: preCheck.participantCount,
+          lifecycleState: "full",
+        };
+      }
+
+      // Upsert caller's active presence row
+      writeClock += 1;
+      const writeIso = new Date(writeClock).toISOString();
+      const existingIdx = storedPresenceRows.findIndex(
+        (r) => r.userId === callerUserId
+      );
+      const record = parseWatchRoomPresenceRecord(
+        serializeWatchRoomPresenceRecord({
+          status: "active",
+          sessionKey: `user:${callerUserId}`,
+          lastSeenAt: writeIso,
+        })
+      );
+      if (existingIdx >= 0) {
+        storedPresenceRows[existingIdx] = {
+          ...storedPresenceRows[existingIdx],
+          isHidden: false,
+          updatedAt: writeIso,
+          record,
+        };
+      } else {
+        storedPresenceRows.push({
+          userId: callerUserId,
+          isHidden: false,
+          createdAt: writeIso,
+          updatedAt: writeIso,
+          record,
+        });
+      }
+
+      const postCheck = computeActiveRoomParticipants({
+        hostId: "host-1",
+        hostProfile,
+        payload,
+        roomCreatedAt: roomCreatedIso,
+        roomUpdatedAt: roomCreatedIso,
+        presenceChildRows: storedPresenceRows,
+        nowMs: writeClock,
+      });
+
+      if (!isHost && !isAlreadyActive && !postCheck.activeUserIds.has(callerUserId)) {
+        return {
+          authorized: false,
+          participantCount: payload.maxParticipants,
+          lifecycleState: "full",
+        };
+      }
+
+      return {
+        authorized: true,
+        participantCount: postCheck.participantCount,
+        lifecycleState:
+          postCheck.participantCount >= payload.maxParticipants
+            ? "full"
+            : "active",
+      };
+    });
+  }
+
+  // Two users ("user-race-a" and "user-race-b") simultaneously attempt to join the final slot
+  const [resA, resB] = await Promise.all([
+    simulateVerifyAndJoin("user-race-a"),
+    simulateVerifyAndJoin("user-race-b"),
+  ]);
+
+  // Exactly one succeeds and one is rejected; capacity never exceeds 2
+  const authorizedResults = [resA, resB].filter((r) => r.authorized);
+  const rejectedResults = [resA, resB].filter((r) => !r.authorized);
+  assert.equal(authorizedResults.length, 1);
+  assert.equal(rejectedResults.length, 1);
+  assert.equal(authorizedResults[0].participantCount, 2);
+  assert.equal(authorizedResults[0].lifecycleState, "full");
+  assert.equal(rejectedResults[0].participantCount, 2);
+  assert.equal(rejectedResults[0].lifecycleState, "full");
+
+  // Reconnecting as the existing active participant ("user-race-a") succeeds without consuming a 3rd slot
+  const reconnectParticipant = await simulateVerifyAndJoin("user-race-a");
+  assert.equal(reconnectParticipant.authorized, true);
+  assert.equal(reconnectParticipant.participantCount, 2);
+
+  // Reconnecting as the Host ("host-1") succeeds when room is 2/2 without consuming a 3rd slot
+  const reconnectHost = await simulateVerifyAndJoin("host-1");
+  assert.equal(reconnectHost.authorized, true);
+  assert.equal(reconnectHost.participantCount, 2);
+});
+

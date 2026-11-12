@@ -9,8 +9,10 @@ import {
   fetchSharedWatchTogetherRooms,
   parseWatchRoomPayloadSync,
   parseWatchRoomPresenceRecord,
+  pruneWatchRoomActiveParticipantsSnapshot,
   resolveBidirectionalBlockedSet,
   serializeWatchRoomPresenceRecord,
+  withWatchRoomJoinLock,
   type WatchRoomHostProfile,
   type WatchRoomLifecycleState,
   type WatchRoomParticipantSnapshot,
@@ -113,7 +115,7 @@ async function upsertUserRoomPresenceRow(params: {
         .from("anime_comments")
         .update({
           body: serialized,
-          is_hidden: status === "left",
+          is_hidden: false,
           updated_at: nowIso,
         })
         .eq("id", presenceRow.id)
@@ -334,195 +336,262 @@ export async function verifyWatchRoomAccessAction(input: {
   }
 
   const supabase = await createClient();
-  const [{ data: roomRow, error }, { data: childRows }, { data: authData }] =
-    await Promise.all([
-      supabase
-        .from("anime_comments")
-        .select("id, user_id, body, is_hidden, created_at, updated_at")
-        .eq("id", cleanRoomId)
-        .eq("anime_id", "watch_room")
-        .is("parent_comment_id", null)
-        .maybeSingle(),
-      supabase
-        .from("anime_comments")
-        .select("id, user_id, body, is_hidden, created_at, updated_at")
-        .eq("anime_id", "watch_room")
-        .eq("parent_comment_id", cleanRoomId)
-        .order("created_at", { ascending: false })
-        .limit(100),
-      supabase.auth.getUser(),
-    ]);
+  return withWatchRoomJoinLock(cleanRoomId, async () => {
+    const [{ data: roomRow, error }, { data: childRows }, { data: authData }] =
+      await Promise.all([
+        supabase
+          .from("anime_comments")
+          .select("id, user_id, body, is_hidden, created_at, updated_at")
+          .eq("id", cleanRoomId)
+          .eq("anime_id", "watch_room")
+          .is("parent_comment_id", null)
+          .maybeSingle(),
+        supabase
+          .from("anime_comments")
+          .select("id, user_id, body, is_hidden, created_at, updated_at")
+          .eq("anime_id", "watch_room")
+          .eq("parent_comment_id", cleanRoomId)
+          .order("created_at", { ascending: false })
+          .limit(100),
+        supabase.auth.getUser(),
+      ]);
 
-  if (error || !roomRow || roomRow.is_hidden) {
-    return {
-      authorized: false,
-      error: "This Watch Together room no longer exists.",
-    };
-  }
-
-  const payload = parseWatchRoomPayloadSync(roomRow.body);
-  if (!payload) {
-    return { authorized: false, error: "Invalid room configuration." };
-  }
-
-  if (payload.status === "ended") {
-    return {
-      authorized: false,
-      error: "This Watch Together session has already ended.",
-      lifecycleState: "ended",
-    };
-  }
-
-  const currentUserId = authData.user?.id ?? null;
-
-  // Enforce bidirectional block check between viewer and room host
-  if (currentUserId && currentUserId !== roomRow.user_id) {
-    const blockedSet = await resolveBidirectionalBlockedSet(
-      supabase,
-      currentUserId,
-      [roomRow.user_id]
-    );
-    if (blockedSet.has(roomRow.user_id)) {
+    if (error || !roomRow || roomRow.is_hidden) {
       return {
         authorized: false,
-        error: "This Watch Together room is unavailable.",
+        error: "This Watch Together room no longer exists.",
       };
     }
-  }
 
-  // Parse child presence records and chat timestamps to evaluate room lifecycle and capacity
-  const presenceChildRows: Array<{
-    userId: string;
-    isHidden: boolean;
-    createdAt: string;
-    updatedAt?: string | null;
-    record: NonNullable<ReturnType<typeof parseWatchRoomPresenceRecord>>;
-  }> = [];
-  let latestChatAtMs = 0;
+    const payload = parseWatchRoomPayloadSync(roomRow.body);
+    if (!payload) {
+      return { authorized: false, error: "Invalid room configuration." };
+    }
 
-  for (const child of childRows ?? []) {
-    const rec = parseWatchRoomPresenceRecord(child.body);
-    if (rec) {
-      presenceChildRows.push({
-        userId: child.user_id,
-        isHidden: Boolean(child.is_hidden),
-        createdAt: child.created_at,
-        updatedAt: (child as { updated_at?: string | null }).updated_at ?? null,
-        record: rec,
-      });
-    } else if (!child.is_hidden) {
-      const chatMs = Date.parse(child.created_at);
-      if (Number.isFinite(chatMs) && chatMs > latestChatAtMs) {
-        latestChatAtMs = chatMs;
+    if (payload.status === "ended") {
+      return {
+        authorized: false,
+        error: "This Watch Together session has already ended.",
+        lifecycleState: "ended",
+      };
+    }
+
+    const currentUserId = authData.user?.id ?? null;
+
+    // Enforce bidirectional block check between viewer and room host
+    if (currentUserId && currentUserId !== roomRow.user_id) {
+      const blockedSet = await resolveBidirectionalBlockedSet(
+        supabase,
+        currentUserId,
+        [roomRow.user_id]
+      );
+      if (blockedSet.has(roomRow.user_id)) {
+        return {
+          authorized: false,
+          error: "This Watch Together room is unavailable.",
+        };
       }
     }
-  }
 
-  const hostFallbackProfile: WatchRoomHostProfile = {
-    id: roomRow.user_id,
-    username: `user_${roomRow.user_id.slice(0, 6)}`,
-    displayName: `user_${roomRow.user_id.slice(0, 6)}`,
-    avatarUrl: null,
-    isPublicProfile: false,
-  };
+    // Parse child presence records and chat timestamps to evaluate room lifecycle and capacity
+    const presenceChildRows: Array<{
+      userId: string;
+      isHidden: boolean;
+      createdAt: string;
+      updatedAt?: string | null;
+      record: NonNullable<ReturnType<typeof parseWatchRoomPresenceRecord>>;
+    }> = [];
+    let latestChatAtMs = 0;
 
-  const nowMs = Date.now();
-  const updatedAt =
-    (roomRow as { updated_at?: string | null }).updated_at ?? null;
+    for (const child of childRows ?? []) {
+      const rec = parseWatchRoomPresenceRecord(child.body);
+      if (rec) {
+        presenceChildRows.push({
+          userId: child.user_id,
+          isHidden: Boolean(child.is_hidden),
+          createdAt: child.created_at,
+          updatedAt:
+            (child as { updated_at?: string | null }).updated_at ?? null,
+          record: rec,
+        });
+      } else if (!child.is_hidden) {
+        const chatMs = Date.parse(child.created_at);
+        if (Number.isFinite(chatMs) && chatMs > latestChatAtMs) {
+          latestChatAtMs = chatMs;
+        }
+      }
+    }
 
-  const { participantCount, activeUserIds, latestPresenceAtMs } =
-    computeActiveRoomParticipants({
-      hostId: roomRow.user_id,
-      hostProfile: hostFallbackProfile,
+    const hostFallbackProfile: WatchRoomHostProfile = {
+      id: roomRow.user_id,
+      username: `user_${roomRow.user_id.slice(0, 6)}`,
+      displayName: `user_${roomRow.user_id.slice(0, 6)}`,
+      avatarUrl: null,
+      isPublicProfile: false,
+    };
+
+    const nowMs = Date.now();
+    const updatedAt =
+      (roomRow as { updated_at?: string | null }).updated_at ?? null;
+
+    const { participantCount, activeUserIds, latestPresenceAtMs } =
+      computeActiveRoomParticipants({
+        hostId: roomRow.user_id,
+        hostProfile: hostFallbackProfile,
+        payload,
+        roomCreatedAt: roomRow.created_at,
+        roomUpdatedAt: updatedAt,
+        presenceChildRows,
+        nowMs,
+      });
+
+    const lifecycle = classifyWatchRoomLifecycle({
       payload,
+      isHidden: Boolean(roomRow.is_hidden),
       roomCreatedAt: roomRow.created_at,
       roomUpdatedAt: updatedAt,
-      presenceChildRows,
+      latestPresenceAtMs,
+      latestChatAtMs,
+      participantCount,
       nowMs,
     });
 
-  const lifecycle = classifyWatchRoomLifecycle({
-    payload,
-    isHidden: Boolean(roomRow.is_hidden),
-    roomCreatedAt: roomRow.created_at,
-    roomUpdatedAt: updatedAt,
-    latestPresenceAtMs,
-    latestChatAtMs,
-    participantCount,
-    nowMs,
-  });
-
-  if (lifecycle.lifecycleState === "stale") {
-    return {
-      authorized: false,
-      error: "This Watch Together room has expired due to inactivity.",
-      lifecycleState: "stale",
-    };
-  }
-
-  const isHost = Boolean(currentUserId && currentUserId === roomRow.user_id);
-
-  // Verify private room invite code before checking capacity
-  if (!isHost && payload.privacy === "private" && payload.accessCodeHash) {
-    const provided = (input.accessCode ?? "").trim();
-    if (!provided) {
+    if (lifecycle.lifecycleState === "stale") {
       return {
         authorized: false,
-        error: "This room is private. Please enter the room invite code.",
+        error: "This Watch Together room has expired due to inactivity.",
+        lifecycleState: "stale",
       };
     }
-    if (hashAccessCode(provided) !== payload.accessCodeHash) {
+
+    const isHost = Boolean(currentUserId && currentUserId === roomRow.user_id);
+
+    // Verify private room invite code before checking capacity
+    if (!isHost && payload.privacy === "private" && payload.accessCodeHash) {
+      const provided = (input.accessCode ?? "").trim();
+      if (!provided) {
+        return {
+          authorized: false,
+          error: "This room is private. Please enter the room invite code.",
+        };
+      }
+      if (hashAccessCode(provided) !== payload.accessCodeHash) {
+        return {
+          authorized: false,
+          error: "Incorrect room invite code. Access denied.",
+        };
+      }
+    }
+
+    // Enforce room capacity on the server (allow re-entry if caller is host or already an active participant)
+    const isAlreadyActiveParticipant = Boolean(
+      currentUserId && activeUserIds.has(currentUserId)
+    );
+    if (
+      !isHost &&
+      !isAlreadyActiveParticipant &&
+      participantCount >= payload.maxParticipants
+    ) {
       return {
         authorized: false,
-        error: "Incorrect room invite code. Access denied.",
+        error: `This Watch Together room is full (${payload.maxParticipants}/${payload.maxParticipants} participants).`,
+        participantCount,
+        maxParticipants: payload.maxParticipants,
+        lifecycleState: "full",
       };
     }
-  }
 
-  // Enforce room capacity on the server (allow re-entry if caller is host or already an active participant)
-  const isAlreadyActiveParticipant = Boolean(
-    currentUserId && activeUserIds.has(currentUserId)
-  );
-  if (
-    !isHost &&
-    !isAlreadyActiveParticipant &&
-    participantCount >= payload.maxParticipants
-  ) {
+    // Record active participant presence for authenticated users and re-verify deterministic slot ownership
+    if (currentUserId) {
+      const allowed = await checkUserAllowed(supabase, currentUserId);
+      if (allowed) {
+        const nowIso = new Date(nowMs).toISOString();
+        await upsertUserRoomPresenceRow({
+          supabase,
+          roomId: cleanRoomId,
+          userId: currentUserId,
+          status: "active",
+          nowIso,
+        });
+
+        // Post-write deterministic slot check to prevent cross-instance final-slot overbooking
+        if (!isHost && !isAlreadyActiveParticipant) {
+          const { data: postWriteRows } = await supabase
+            .from("anime_comments")
+            .select("id, user_id, body, is_hidden, created_at, updated_at")
+            .eq("anime_id", "watch_room")
+            .eq("parent_comment_id", cleanRoomId)
+            .order("created_at", { ascending: false })
+            .limit(100);
+
+          const postWritePresence: typeof presenceChildRows = [];
+          for (const child of postWriteRows ?? []) {
+            const rec = parseWatchRoomPresenceRecord(child.body);
+            if (rec) {
+              postWritePresence.push({
+                userId: child.user_id,
+                isHidden: Boolean(child.is_hidden),
+                createdAt: child.created_at,
+                updatedAt:
+                  (child as { updated_at?: string | null }).updated_at ?? null,
+                record: rec,
+              });
+            }
+          }
+
+          const postWriteCheck = computeActiveRoomParticipants({
+            hostId: roomRow.user_id,
+            hostProfile: hostFallbackProfile,
+            payload,
+            roomCreatedAt: roomRow.created_at,
+            roomUpdatedAt: updatedAt,
+            presenceChildRows: postWritePresence,
+            nowMs: Date.now(),
+          });
+
+          if (!postWriteCheck.activeUserIds.has(currentUserId)) {
+            await upsertUserRoomPresenceRow({
+              supabase,
+              roomId: cleanRoomId,
+              userId: currentUserId,
+              status: "left",
+              nowIso: new Date().toISOString(),
+            });
+            return {
+              authorized: false,
+              error: `This Watch Together room is full (${payload.maxParticipants}/${payload.maxParticipants} participants).`,
+              participantCount: payload.maxParticipants,
+              maxParticipants: payload.maxParticipants,
+              lifecycleState: "full",
+            };
+          }
+
+          return {
+            authorized: true,
+            participantCount: postWriteCheck.participantCount,
+            maxParticipants: payload.maxParticipants,
+            lifecycleState:
+              postWriteCheck.participantCount >= payload.maxParticipants
+                ? "full"
+                : "active",
+          };
+        }
+      }
+    }
+
+    const updatedCount =
+      currentUserId && !isAlreadyActiveParticipant && !isHost
+        ? Math.min(participantCount + 1, payload.maxParticipants)
+        : participantCount;
+
     return {
-      authorized: false,
-      error: `This Watch Together room is full (${payload.maxParticipants}/${payload.maxParticipants} participants).`,
-      participantCount,
+      authorized: true,
+      participantCount: updatedCount,
       maxParticipants: payload.maxParticipants,
-      lifecycleState: "full",
+      lifecycleState:
+        updatedCount >= payload.maxParticipants ? "full" : "active",
     };
-  }
-
-  // Record active participant presence for authenticated users
-  if (currentUserId) {
-    const allowed = await checkUserAllowed(supabase, currentUserId);
-    if (allowed) {
-      await upsertUserRoomPresenceRow({
-        supabase,
-        roomId: cleanRoomId,
-        userId: currentUserId,
-        status: "active",
-        nowIso: new Date(nowMs).toISOString(),
-      });
-    }
-  }
-
-  const updatedCount =
-    currentUserId && !isAlreadyActiveParticipant && !isHost
-      ? Math.min(participantCount + 1, payload.maxParticipants)
-      : participantCount;
-
-  return {
-    authorized: true,
-    participantCount: updatedCount,
-    maxParticipants: payload.maxParticipants,
-    lifecycleState:
-      updatedCount >= payload.maxParticipants ? "full" : "active",
-  };
+  });
 }
 
 export async function heartbeatWatchRoomAction(input: {
@@ -572,41 +641,17 @@ export async function heartbeatWatchRoomAction(input: {
     return { success: true };
   }
 
-  let nextActiveParticipants = existing.activeParticipants;
-  if (Array.isArray(input.activeParticipants)) {
-    const blockedSet = await resolveBidirectionalBlockedSet(supabase, user.id);
-    const seenKeys = new Set<string>();
-    const sanitized: WatchRoomParticipantSnapshot[] = [];
-
-    for (const item of input.activeParticipants) {
-      if (!item || typeof item !== "object" || !item.username) continue;
-      const uid = item.userId ? String(item.userId) : null;
-      if (uid && blockedSet.has(uid)) continue;
-      const key = uid ? `user:${uid}` : String(item.key || "");
-      if (!key || seenKeys.has(key)) continue;
-      seenKeys.add(key);
-
-      sanitized.push({
-        key,
-        userId: uid,
-        username: String(item.username).slice(0, 40),
-        displayName: String(item.displayName || item.username).slice(0, 60),
-        avatarUrl: item.avatarUrl ? String(item.avatarUrl) : null,
-        isPublicProfile: item.isPublicProfile === true,
-        role:
-          uid === user.id
-            ? "host"
-            : item.role === "guest"
-              ? "guest"
-              : "viewer",
-        lastSeenAt: nowIso,
-      });
-
-      if (sanitized.length >= existing.maxParticipants) break;
-    }
-
-    nextActiveParticipants = sanitized;
-  }
+  const blockedSet = await resolveBidirectionalBlockedSet(supabase, user.id);
+  const nextActiveParticipants = pruneWatchRoomActiveParticipantsSnapshot({
+    existing: existing.activeParticipants,
+    liveRealtimeParticipants: Array.isArray(input.activeParticipants)
+      ? input.activeParticipants
+      : undefined,
+    hostId: user.id,
+    maxParticipants: existing.maxParticipants,
+    blockedSet,
+    nowIso,
+  });
 
   const updatedPayload: WatchRoomPayload = {
     ...existing,
@@ -652,6 +697,40 @@ export async function leaveWatchRoomAction(input: {
     status: "left",
     nowIso,
   });
+
+  // If the caller is the room host, mark hostPresent: false and purge guest snapshots
+  const { data: roomRow } = await supabase
+    .from("anime_comments")
+    .select("id, user_id, body, is_hidden")
+    .eq("id", cleanRoomId)
+    .eq("anime_id", "watch_room")
+    .is("parent_comment_id", null)
+    .maybeSingle();
+
+  if (roomRow && !roomRow.is_hidden && roomRow.user_id === user.id) {
+    const existing = parseWatchRoomPayloadSync(roomRow.body);
+    if (existing && existing.status !== "ended") {
+      const updatedPayload: WatchRoomPayload = {
+        ...existing,
+        hostPresent: false,
+        activeParticipants: pruneWatchRoomActiveParticipantsSnapshot({
+          existing: existing.activeParticipants,
+          hostId: user.id,
+          maxParticipants: existing.maxParticipants,
+          nowIso,
+          hostLeaving: true,
+        }),
+      };
+      await supabase
+        .from("anime_comments")
+        .update({
+          body: JSON.stringify(updatedPayload),
+          updated_at: nowIso,
+        })
+        .eq("id", cleanRoomId)
+        .eq("user_id", user.id);
+    }
+  }
 
   revalidatePath("/watch-together");
   return { success: true };
@@ -742,7 +821,14 @@ export async function updateWatchRoomStateAction(input: {
     lastHeartbeatAt: nowIso,
     hostPresent: nextStatus !== "ended",
     activeParticipants:
-      nextStatus === "ended" ? [] : existing.activeParticipants,
+      nextStatus === "ended"
+        ? []
+        : pruneWatchRoomActiveParticipantsSnapshot({
+            existing: existing.activeParticipants,
+            hostId: user.id,
+            maxParticipants: existing.maxParticipants,
+            nowIso,
+          }),
   };
 
   const { error: updateError } = await supabase

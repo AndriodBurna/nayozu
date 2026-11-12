@@ -370,16 +370,18 @@ export function computeActiveRoomParticipants(params: {
   } = params;
 
   const participantMap = new Map<string, WatchRoomParticipantSnapshot>();
+  const firstJoinedAtMap = new Map<string, number>();
   const explicitlyLeftKeys = new Set<string>();
   let latestPresenceAtMs = 0;
 
-  // 1. Inspect stored child presence records (newest record per user wins)
+  // 1. Inspect stored child presence records (newest record per user wins; track earliest join time)
   const latestRowByUser = new Map<
     string,
     {
       userId: string;
       isHidden: boolean;
       timestampMs: number;
+      firstJoinedMs: number;
       lastSeenIso: string;
       record: WatchRoomPresenceRecord;
       profile?: WatchRoomHostProfile;
@@ -388,21 +390,29 @@ export function computeActiveRoomParticipants(params: {
 
   for (const row of presenceChildRows) {
     if (!row.userId || blockedSet?.has(row.userId)) continue;
+    const createdMs = toTimestampMs(row.createdAt);
     const rowTimeMs = Math.max(
       toTimestampMs(row.record.lastSeenAt),
       toTimestampMs(row.updatedAt),
-      toTimestampMs(row.createdAt)
+      createdMs
     );
     const prev = latestRowByUser.get(row.userId);
+    const earliestMs =
+      prev && prev.firstJoinedMs > 0 && createdMs > 0
+        ? Math.min(prev.firstJoinedMs, createdMs)
+        : createdMs || rowTimeMs;
     if (!prev || rowTimeMs >= prev.timestampMs) {
       latestRowByUser.set(row.userId, {
         userId: row.userId,
         isHidden: row.isHidden,
         timestampMs: rowTimeMs,
+        firstJoinedMs: earliestMs,
         lastSeenIso: row.record.lastSeenAt || row.updatedAt || row.createdAt,
         record: row.record,
         profile: row.profile,
       });
+    } else if (prev) {
+      prev.firstJoinedMs = earliestMs;
     }
   }
 
@@ -417,6 +427,7 @@ export function computeActiveRoomParticipants(params: {
         latestPresenceAtMs = entry.timestampMs;
       }
       const prof = entry.profile;
+      firstJoinedAtMap.set(userKey, entry.firstJoinedMs);
       participantMap.set(userKey, {
         key: userKey,
         userId: uid,
@@ -453,6 +464,7 @@ export function computeActiveRoomParticipants(params: {
       }
 
       if (!participantMap.has(canonicalKey)) {
+        firstJoinedAtMap.set(canonicalKey, seenMs);
         participantMap.set(canonicalKey, {
           key: canonicalKey,
           userId: snapUserId,
@@ -488,6 +500,7 @@ export function computeActiveRoomParticipants(params: {
     !blockedSet?.has(hostId);
 
   if (hostRecentlyActive && !participantMap.has(hostKey)) {
+    firstJoinedAtMap.set(hostKey, toTimestampMs(roomCreatedAt) || hostLastSignalMs);
     participantMap.set(hostKey, {
       key: hostKey,
       userId: hostId,
@@ -504,11 +517,14 @@ export function computeActiveRoomParticipants(params: {
     });
   }
 
-  // Order host first, then viewers by most recently seen
+  // Order host first, then viewers by earliest join time (first-come-first-served) with deterministic key tie-breaker
   const ordered = Array.from(participantMap.values()).sort((a, b) => {
     if (a.role === "host" && b.role !== "host") return -1;
     if (b.role === "host" && a.role !== "host") return 1;
-    return toTimestampMs(b.lastSeenAt) - toTimestampMs(a.lastSeenAt);
+    const aJoin = firstJoinedAtMap.get(a.key) ?? toTimestampMs(a.lastSeenAt);
+    const bJoin = firstJoinedAtMap.get(b.key) ?? toTimestampMs(b.lastSeenAt);
+    if (aJoin !== bJoin) return aJoin - bJoin;
+    return a.key.localeCompare(b.key);
   });
 
   const clampedParticipants = ordered.slice(0, payload.maxParticipants);
@@ -771,6 +787,148 @@ export async function resolveBidirectionalBlockedSet(
   return blockedSet;
 }
 
+const roomJoinLocks = new Map<string, Promise<unknown>>();
+
+/**
+ * Per-room async mutex used on the server to serialize concurrent join checks
+ * and presence writes for the same room, preventing final-slot race conditions.
+ */
+export async function withWatchRoomJoinLock<T>(
+  roomId: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const prev = roomJoinLocks.get(roomId) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const chained = prev.then(() => gate);
+  roomJoinLocks.set(roomId, chained);
+
+  await prev.catch(() => {});
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (roomJoinLocks.get(roomId) === chained) {
+      roomJoinLocks.delete(roomId);
+    }
+  }
+}
+
+/**
+ * Safely updates or prunes `WatchRoomPayload.activeParticipants` on the server:
+ * - When `liveRealtimeParticipants` is provided (from a subscribed Realtime channel),
+ *   replaces the snapshot with the live list and stamps `nowIso`, immediately purging
+ *   any guest who disconnected while the host was away or connected.
+ * - When `liveRealtimeParticipants` is omitted (e.g. heartbeat before Realtime sync or
+ *   playback update), prunes entries older than `PARTICIPANT_ACTIVE_TTL_MS` without
+ *   advancing guest `lastSeenAt` timestamps so stale guests never remain indefinitely.
+ * - When `hostLeaving` is true, removes the host and all guest entries (since no host
+ *   is present to monitor Realtime guest disconnects).
+ */
+export function pruneWatchRoomActiveParticipantsSnapshot(params: {
+  existing: WatchRoomParticipantSnapshot[] | undefined;
+  liveRealtimeParticipants?: WatchRoomParticipantSnapshot[];
+  hostId: string;
+  maxParticipants: number;
+  blockedSet?: ReadonlySet<string>;
+  nowIso: string;
+  nowMs?: number;
+  hostLeaving?: boolean;
+}): WatchRoomParticipantSnapshot[] {
+  const {
+    existing,
+    liveRealtimeParticipants,
+    hostId,
+    maxParticipants,
+    blockedSet,
+    nowIso,
+    nowMs = toTimestampMs(nowIso) || Date.now(),
+    hostLeaving = false,
+  } = params;
+
+  if (hostLeaving) {
+    if (!Array.isArray(existing)) return [];
+    return existing.filter((p) => {
+      if (!p || typeof p !== "object") return false;
+      const uid = p.userId ? String(p.userId) : null;
+      if (!uid || uid === hostId) return false;
+      if (blockedSet?.has(uid)) return false;
+      if (p.role === "guest" || p.key.startsWith("guest:")) return false;
+      const seenMs = toTimestampMs(p.lastSeenAt);
+      return seenMs > 0 && nowMs - seenMs <= PARTICIPANT_ACTIVE_TTL_MS;
+    });
+  }
+
+  if (Array.isArray(liveRealtimeParticipants)) {
+    const seenKeys = new Set<string>();
+    const sanitized: WatchRoomParticipantSnapshot[] = [];
+
+    for (const item of liveRealtimeParticipants) {
+      if (!item || typeof item !== "object" || !item.username) continue;
+      const uid = item.userId ? String(item.userId) : null;
+      if (uid && blockedSet?.has(uid)) continue;
+      const key = uid
+        ? `user:${uid}`
+        : String(item.key || "").startsWith("guest:")
+          ? String(item.key)
+          : `guest:${String(item.key || item.username)}`;
+      if (!key || seenKeys.has(key)) continue;
+      seenKeys.add(key);
+
+      sanitized.push({
+        key,
+        userId: uid,
+        username: String(item.username).slice(0, 40),
+        displayName: String(item.displayName || item.username).slice(0, 60),
+        avatarUrl: item.avatarUrl ? String(item.avatarUrl) : null,
+        isPublicProfile: item.isPublicProfile === true,
+        role:
+          uid === hostId
+            ? "host"
+            : item.role === "guest" || !uid
+              ? "guest"
+              : "viewer",
+        lastSeenAt: nowIso,
+      });
+
+      if (sanitized.length >= maxParticipants) break;
+    }
+
+    return sanitized;
+  }
+
+  // No live Realtime snapshot provided: prune expired entries WITHOUT refreshing guest timestamps
+  if (!Array.isArray(existing)) return [];
+  const pruned: WatchRoomParticipantSnapshot[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const item of existing) {
+    if (!item || typeof item !== "object" || !item.key || !item.username) {
+      continue;
+    }
+    const uid = item.userId ? String(item.userId) : null;
+    if (uid && blockedSet?.has(uid)) continue;
+    const seenMs = toTimestampMs(item.lastSeenAt);
+    if (seenMs <= 0 || nowMs - seenMs > PARTICIPANT_ACTIVE_TTL_MS) {
+      continue;
+    }
+    if (seenKeys.has(item.key)) continue;
+    seenKeys.add(item.key);
+
+    pruned.push({
+      ...item,
+      // Only refresh the host's own timestamp when the host sends a non-Realtime heartbeat
+      lastSeenAt: uid === hostId ? nowIso : item.lastSeenAt,
+    });
+
+    if (pruned.length >= maxParticipants) break;
+  }
+
+  return pruned;
+}
+
 /**
  * Shared Watch Together data service used by BOTH the right-side Community & Activity
  * drawer and the Watch Together lobby page.
@@ -797,21 +955,44 @@ export async function fetchSharedWatchTogetherRooms(
     currentUserId = user?.id ?? null;
   }
 
-  const { data: rawRows, error: roomsError } = await supabase
+  // 1. Fetch top-level watch_room records (parent_comment_id IS NULL) so chat volume never crowds out rooms
+  const { data: rawTopRows, error: roomsError } = await supabase
     .from("anime_comments")
     .select(
       "id, user_id, anime_id, parent_comment_id, body, is_hidden, created_at, updated_at"
     )
     .eq("anime_id", "watch_room")
+    .is("parent_comment_id", null)
     .eq("is_hidden", false)
     .order("created_at", { ascending: false })
-    .limit(120);
+    .limit(60);
 
   if (roomsError) {
     throw new Error(roomsError.message);
   }
 
-  const rows = rawRows ?? [];
+  const topRows = (rawTopRows ?? []).filter((r) => !r.parent_comment_id);
+  const topRoomIds = topRows.map((r) => r.id);
+
+  // 2. Fetch child rows (presence records + chat messages) for those top-level rooms
+  const { data: rawChildRows } =
+    topRoomIds.length > 0
+      ? await supabase
+          .from("anime_comments")
+          .select(
+            "id, user_id, anime_id, parent_comment_id, body, is_hidden, created_at, updated_at"
+          )
+          .eq("anime_id", "watch_room")
+          .in("parent_comment_id", topRoomIds)
+          .eq("is_hidden", false)
+          .order("created_at", { ascending: false })
+          .limit(300)
+      : { data: [] };
+
+  const childRows = (rawChildRows ?? []).filter((r) =>
+    Boolean(r.parent_comment_id)
+  );
+  const rows = [...topRows, ...childRows];
   const candidateUserIds = new Set<string>();
   for (const r of rows) {
     if (r.user_id) candidateUserIds.add(r.user_id);
@@ -824,9 +1005,6 @@ export async function fetchSharedWatchTogetherRooms(
       currentUserId ?? null,
       candidateUserIds
     ));
-
-  const topRows = rows.filter((r) => !r.parent_comment_id);
-  const childRows = rows.filter((r) => Boolean(r.parent_comment_id));
 
   // Parse room payloads and collect external anime IDs + user IDs for batch hydration
   const parsedTopRooms: Array<{
