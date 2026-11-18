@@ -53,6 +53,7 @@ import {
   ReportContentModal,
   BlockUserButton,
 } from "@/components/community-action-modals";
+import FriendActivityFeed from "@/components/friend-activity-feed";
 
 export interface CommunityAuthor {
   id?: string;
@@ -112,7 +113,7 @@ interface CommunityClientProps {
   initialDiscussionId?: string | null;
 }
 
-type TabKey = "all" | "reviews" | "questions";
+type TabKey = "all" | "reviews" | "questions" | "friends";
 type SortKey = "latest" | "oldest" | "discussed" | "reacted";
 
 const DEFAULT_REACTIONS: ReactionSummary = {
@@ -461,6 +462,7 @@ export default function CommunityClient({
     { id: "all", label: "All Discussions", icon: MessageSquare },
     { id: "reviews", label: "Reviews", icon: BookOpen },
     { id: "questions", label: "Questions", icon: HelpCircle },
+    { id: "friends", label: "Friend Activity", icon: Users },
   ];
 
   return (
@@ -830,7 +832,29 @@ export default function CommunityClient({
       )}
 
       {/* 5. Main Content Area */}
-      {filteredPosts.length === 0 ? (
+      {activeTab === "friends" ? (
+        currentUser ? (
+          <FriendActivityFeed />
+        ) : (
+          <div className="flex flex-col items-center justify-center rounded-2xl border border-[#1c2236] bg-[#121624] p-12 text-center space-y-3">
+            <Users className="h-8 w-8 text-primary" />
+            <h3 className="text-base font-bold text-white">
+              Sign In to See Your Friends&apos; Activity
+            </h3>
+            <p className="max-w-sm text-xs text-zinc-400">
+              Your Friend Activity feed shows anime &amp; manga progress, reviews, discussions, and live Watch Together rooms from your accepted friends.
+            </p>
+            <div className="flex items-center gap-2.5 pt-1">
+              <Button asChild size="sm" className="rounded-xl bg-primary text-xs font-bold text-primary-foreground">
+                <Link href="/login?next=%2Fcommunity">Sign In</Link>
+              </Button>
+              <Button asChild variant="outline" size="sm" className="rounded-xl text-xs">
+                <Link href="/register?next=%2Fcommunity">Create Account</Link>
+              </Button>
+            </div>
+          </div>
+        )
+      ) : filteredPosts.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-2xl border border-[#1c2236] bg-[#121624] p-12 text-center space-y-3">
           <MessageSquare className="h-8 w-8 text-zinc-500" />
           <h3 className="text-base font-bold text-white">No matching posts found</h3>

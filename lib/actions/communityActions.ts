@@ -3,6 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { fetchSharedWatchTogetherRooms } from "@/lib/watch-together/roomService";
+import {
+  cleanupFriendshipBetweenUsersWithClient,
+  type FriendshipRow,
+} from "@/lib/friends/friendsService";
 
 export type MediaType = "anime" | "manga";
 export type ReactionType = "like" | "helpful" | "fire";
@@ -1881,6 +1885,12 @@ export async function blockUserAction(input: {
     return { success: false, error: "Failed to block user." };
   }
 
+  await cleanupFriendshipBetweenUsersWithClient(
+    supabase,
+    user.id,
+    cleanBlockedId
+  );
+
   revalidatePath("/community");
   revalidatePath("/settings");
   revalidatePath("/profile");
@@ -2404,6 +2414,7 @@ export interface RightPanelDataResponse {
   blockedUserIds: string[];
   friendshipSystemAvailable: boolean;
   friends: RightPanelCommunityMemberDTO[];
+  incomingFriendRequestsCount?: number;
   activeMembers: RightPanelCommunityMemberDTO[];
   watchRooms: RightPanelWatchRoomDTO[];
   trendingDiscussions: RightPanelTrendingDiscussionDTO[];
@@ -2453,8 +2464,8 @@ export async function getRightPanelDataAction(): Promise<RightPanelDataResponse>
       };
     }
 
-    // 2. Fetch shared Watch Together rooms & Discussions in parallel
-    const [sharedWatchData, discussionsRes] = await Promise.all([
+    // 2. Fetch shared Watch Together rooms, Discussions & Friendships in parallel
+    const [sharedWatchData, discussionsRes, friendshipsRes] = await Promise.all([
       fetchSharedWatchTogetherRooms(supabase, {
         currentUserId,
         precomputedBlockedSet: blockedSet,
@@ -2467,6 +2478,17 @@ export async function getRightPanelDataAction(): Promise<RightPanelDataResponse>
         .eq("is_hidden", false)
         .order("created_at", { ascending: false })
         .limit(50),
+      currentUserId
+        ? supabase
+            .from("friendships")
+            .select(
+              "id, requester_id, addressee_id, status, created_at, updated_at, responded_at"
+            )
+            .or(
+              `requester_id.eq.${currentUserId},addressee_id.eq.${currentUserId}`
+            )
+            .order("updated_at", { ascending: false })
+        : Promise.resolve({ data: [], error: null }),
     ]);
 
     if (discussionsRes.error) {
@@ -2564,10 +2586,21 @@ export async function getRightPanelDataAction(): Promise<RightPanelDataResponse>
     const validReactions = (reactionsRes.data ?? []).filter(
       (r) => !blockedSet.has(r.user_id)
     );
+    const rawFriendshipRows = (friendshipsRes.data ?? []) as FriendshipRow[];
 
     // Collect all user IDs and media external IDs we need profiles/titles for
     const profileIdsSet = new Set<string>();
     const mediaExternalIdsSet = new Set<number>();
+
+    for (const fRow of rawFriendshipRows) {
+      const otherId =
+        fRow.requester_id === currentUserId
+          ? fRow.addressee_id
+          : fRow.requester_id;
+      if (otherId && !blockedSet.has(otherId)) {
+        profileIdsSet.add(otherId);
+      }
+    }
 
     for (const hostId of sharedWatchData.hostActivityMap.keys()) {
       if (!blockedSet.has(hostId)) {
@@ -2833,12 +2866,48 @@ export async function getRightPanelDataAction(): Promise<RightPanelDataResponse>
       return tb - ta;
     });
 
+    // 6. Build Accepted Friends & Incoming Request Count for the authenticated user
+    const friends: RightPanelCommunityMemberDTO[] = [];
+    let incomingFriendRequestsCount = 0;
+
+    if (currentUserId) {
+      for (const fRow of rawFriendshipRows) {
+        const otherId: string =
+          fRow.requester_id === currentUserId
+            ? fRow.addressee_id
+            : fRow.requester_id;
+        if (!otherId || otherId === currentUserId || blockedSet.has(otherId)) {
+          continue;
+        }
+        if (fRow.status === "pending" && fRow.addressee_id === currentUserId) {
+          incomingFriendRequestsCount += 1;
+          continue;
+        }
+        if (fRow.status !== "accepted") {
+          continue;
+        }
+        const prof = getAuthorProfile(otherId);
+        const activity = memberActivityMap.get(otherId);
+        friends.push({
+          id: otherId,
+          username: prof.username,
+          displayName: prof.displayName,
+          avatarUrl: prof.avatarUrl,
+          isPublicProfile: prof.isPublicProfile,
+          recentActivity: activity?.recentActivity ?? null,
+          lastActiveAt:
+            activity?.lastActiveAt ?? fRow.updated_at ?? fRow.created_at ?? null,
+        });
+      }
+    }
+
     return {
       success: true,
       currentUserProfile,
       blockedUserIds: Array.from(blockedSet),
-      friendshipSystemAvailable: false,
-      friends: [],
+      friendshipSystemAvailable: true,
+      friends,
+      incomingFriendRequestsCount,
       activeMembers: activeMembers.slice(0, 6),
       watchRooms: watchRooms.slice(0, 4),
       trendingDiscussions,
@@ -2851,8 +2920,9 @@ export async function getRightPanelDataAction(): Promise<RightPanelDataResponse>
       error: message,
       currentUserProfile: null,
       blockedUserIds: [],
-      friendshipSystemAvailable: false,
+      friendshipSystemAvailable: true,
       friends: [],
+      incomingFriendRequestsCount: 0,
       activeMembers: [],
       watchRooms: [],
       trendingDiscussions: [],

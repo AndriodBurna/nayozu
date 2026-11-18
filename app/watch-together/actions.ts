@@ -466,20 +466,58 @@ export async function verifyWatchRoomAccessAction(input: {
 
     const isHost = Boolean(currentUserId && currentUserId === roomRow.user_id);
 
-    // Verify private room invite code before checking capacity
+    // Verify private room invite code (or an accepted, unexpired host invitation) before checking capacity
     if (!isHost && payload.privacy === "private" && payload.accessCodeHash) {
       const provided = (input.accessCode ?? "").trim();
-      if (!provided) {
-        return {
-          authorized: false,
-          error: "This room is private. Please enter the room invite code.",
-        };
+      let authorizedByAcceptedInvite = false;
+
+      if (!provided && currentUserId) {
+        try {
+          const [{ data: inviteRow }, { data: friendshipRow }] =
+            await Promise.all([
+              supabase
+                .from("watch_room_invitations")
+                .select("id, status, expires_at")
+                .eq("room_id", cleanRoomId)
+                .eq("host_id", roomRow.user_id)
+                .eq("invitee_id", currentUserId)
+                .eq("status", "accepted")
+                .maybeSingle(),
+              supabase
+                .from("friendships")
+                .select("id, status")
+                .or(
+                  `and(requester_id.eq.${roomRow.user_id},addressee_id.eq.${currentUserId}),and(requester_id.eq.${currentUserId},addressee_id.eq.${roomRow.user_id})`
+                )
+                .eq("status", "accepted")
+                .maybeSingle(),
+            ]);
+
+          if (
+            inviteRow?.status === "accepted" &&
+            Date.parse(inviteRow.expires_at) > nowMs &&
+            friendshipRow?.status === "accepted"
+          ) {
+            authorizedByAcceptedInvite = true;
+          }
+        } catch {
+          authorizedByAcceptedInvite = false;
+        }
       }
-      if (hashAccessCode(provided) !== payload.accessCodeHash) {
-        return {
-          authorized: false,
-          error: "Incorrect room invite code. Access denied.",
-        };
+
+      if (!authorizedByAcceptedInvite) {
+        if (!provided) {
+          return {
+            authorized: false,
+            error: "This room is private. Please enter the room invite code.",
+          };
+        }
+        if (hashAccessCode(provided) !== payload.accessCodeHash) {
+          return {
+            authorized: false,
+            error: "Incorrect room invite code. Access denied.",
+          };
+        }
       }
     }
 
@@ -856,6 +894,21 @@ export async function updateWatchRoomStateAction(input: {
       status: "left",
       nowIso,
     });
+
+    try {
+      await supabase
+        .from("watch_room_invitations")
+        .update({
+          status: "expired",
+          responded_at: nowIso,
+          updated_at: nowIso,
+        })
+        .eq("room_id", cleanRoomId)
+        .eq("host_id", user.id)
+        .eq("status", "pending");
+    } catch {
+      /* non-fatal */
+    }
   }
 
   revalidatePath("/watch-together");

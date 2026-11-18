@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
@@ -24,6 +24,7 @@ import {
   Shield,
   Star,
   User as UserIcon,
+  Users,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -31,6 +32,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useShell } from "@/components/shell-context";
+import FriendsManager, { type FriendsSubTab } from "@/components/friends-manager";
+import type { FriendsOverviewDTO } from "@/lib/friends/friendsService";
 import {
   updateProfileSettingsAction,
   uploadAvatarAction,
@@ -55,6 +58,8 @@ export interface ProfilePageData {
   createdAt: string | null;
   updatedAt: string | null;
   initialTab?: string;
+  initialSubTab?: string;
+  friendsOverview?: FriendsOverviewDTO;
   animeWatchlist: LibraryEntryItem[];
   mangaReadingList: LibraryEntryItem[];
   favorites: LibraryEntryItem[];
@@ -196,6 +201,7 @@ export default function ProfileClient({
     "reading-list",
     "favorites",
     "history",
+    "friends",
     "my-reviews",
     "my-discussions",
     "my-comments",
@@ -207,7 +213,24 @@ export default function ProfileClient({
     ? (initialProfile.initialTab as ProfileTabKey)
     : "watchlist";
 
+  const validSubTabs: FriendsSubTab[] = [
+    "friends",
+    "activity",
+    "incoming",
+    "sent",
+    "search",
+  ];
+  const resolvedInitialSubTab: FriendsSubTab = validSubTabs.includes(
+    initialProfile.initialSubTab as FriendsSubTab
+  )
+    ? (initialProfile.initialSubTab as FriendsSubTab)
+    : "friends";
+
   const [activeTab, setActiveTab] = useState<ProfileTabKey>(resolvedInitialTab);
+
+  useEffect(() => {
+    setActiveTab(resolvedInitialTab);
+  }, [resolvedInitialTab]);
   const myReviews = initialProfile.myReviews ?? [];
   const myDiscussions = initialProfile.myDiscussions ?? [];
   const myComments = initialProfile.myComments ?? [];
@@ -816,6 +839,11 @@ export default function ProfileClient({
                 icon: History,
               },
               {
+                id: "friends",
+                label: `Friends (${initialProfile.friendsOverview?.friends.length ?? 0})`,
+                icon: Users,
+              },
+              {
                 id: "my-reviews",
                 label: `My Reviews (${myReviews.length})`,
                 icon: Star,
@@ -853,7 +881,12 @@ export default function ProfileClient({
         </div>
 
         {/* Active Tab Content */}
-        {activeTab === "my-reviews" ? (
+        {activeTab === "friends" ? (
+          <FriendsManager
+            initialOverview={initialProfile.friendsOverview}
+            initialSubTab={resolvedInitialSubTab}
+          />
+        ) : activeTab === "my-reviews" ? (
           myReviews.length === 0 ? (
             <div className="rounded-2xl border border-[#1b2238] bg-[#121624]/60 py-12 px-4 text-center space-y-3">
               <Star className="mx-auto h-8 w-8 text-zinc-500" />

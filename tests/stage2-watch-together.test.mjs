@@ -1246,8 +1246,12 @@ test("12. Realtime subscription cleanup and leave lifecycle", () => {
   assert.ok(clientSrc.includes("void supabase.removeChannel(channel)"));
   assert.ok(clientSrc.includes("leaveWatchRoomAction"));
 
-  // Right panel cleans up presence channel and window event listener
-  assert.ok(rightPanelSrc.includes("void supabase.removeChannel(channel)"));
+  // Right panel or ShellProvider cleans up presence channel and window event listener
+  const shellSrc = readProjectFile("components/shell-context.tsx");
+  assert.ok(
+    rightPanelSrc.includes("void supabase.removeChannel(channel)") ||
+      shellSrc.includes("void supabase.removeChannel(channel)")
+  );
   assert.ok(
     rightPanelSrc.includes(
       'window.removeEventListener(\n        "nayozu:watch-rooms-updated"'

@@ -357,12 +357,13 @@ test("9. Malicious redirect targets are rejected", () => {
 
 test("10. Private profiles are not broadcast or exposed as public presence", () => {
   const rightPanelSrc = readProjectFile("components/right-panel.tsx");
+  const shellSrc = readProjectFile("components/shell-context.tsx");
 
-  // Channel subscription lifecycle must be separated from profile updates
-  assert.match(
-    rightPanelSrc,
-    /\}, \[rightOpen, currentUserId\]\);/,
-    "Realtime channel subscription effect must depend only on [rightOpen, currentUserId] to prevent WebSocket reconnections when profile loads"
+  // Channel subscription lifecycle must be separated from profile updates (either in RightPanel or ShellProvider)
+  assert.ok(
+    /\}, \[rightOpen, currentUserId\]\);/.test(rightPanelSrc) ||
+      /\}, \[currentUserId\]\);/.test(shellSrc),
+    "Realtime channel subscription effect must depend only on [currentUserId] (or [rightOpen, currentUserId]) to prevent WebSocket reconnections when profile loads"
   );
 
   const user = { id: "user-1" };

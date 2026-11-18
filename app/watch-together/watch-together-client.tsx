@@ -14,6 +14,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertCircle,
   ArrowLeft,
+  Check,
   CheckCircle2,
   Clock,
   Crown,
@@ -34,6 +35,8 @@ import {
   Send,
   ShieldAlert,
   Tv,
+  UserCheck,
+  UserPlus,
   Users,
   Wifi,
   WifiOff,
@@ -44,7 +47,18 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { useShell } from "@/components/shell-context";
 import { createClient } from "@/lib/supabase/client";
+import {
+  acceptWatchRoomInvitationAction,
+  cancelWatchRoomInvitationAction,
+  declineWatchRoomInvitationAction,
+  getFriendsOverviewAction,
+  getWatchRoomInvitationsAction,
+  sendWatchRoomInvitationAction,
+} from "@/lib/actions/friendActions";
+import type { FriendProfileSummaryDTO } from "@/lib/friends/friendsService";
+import type { WatchRoomInvitationDTO } from "@/lib/friends/friendActivityAndInvitesService";
 import {
   buildYouTubeEmbedUrl,
   type VideoEpisode,
@@ -135,13 +149,33 @@ export default function WatchTogetherClient({
 }: WatchTogetherClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { isUserOnline } = useShell();
   const roomParam = searchParams.get("room") ?? "";
+  const inviteParam = searchParams.get("invite") ?? "";
 
   const [rooms, setRooms] = useState<WatchRoomItem[]>(initialRooms);
   const [lobbyLoading, setLobbyLoading] = useState<boolean>(false);
   const [lobbyError, setLobbyError] = useState<string | null>(initialLoadError);
   const [joinBannerError, setJoinBannerError] = useState<string | null>(null);
   const [joiningRoomId, setJoiningRoomId] = useState<string | null>(null);
+
+  // Stage 4: Watch Together Friend Invitations state
+  const [incomingInvites, setIncomingInvites] = useState<
+    WatchRoomInvitationDTO[]
+  >([]);
+  const [roomOutgoingInvites, setRoomOutgoingInvites] = useState<
+    WatchRoomInvitationDTO[]
+  >([]);
+  const [hostFriends, setHostFriends] = useState<FriendProfileSummaryDTO[]>([]);
+  const [inviteModalOpen, setInviteModalOpen] = useState<boolean>(false);
+  const [loadingHostInvitePanel, setLoadingHostInvitePanel] =
+    useState<boolean>(false);
+  const [inviteFeedback, setInviteFeedback] = useState<{
+    type: "error" | "success";
+    text: string;
+  } | null>(null);
+  const [actingInviteKey, setActingInviteKey] = useState<string | null>(null);
+  const [isInvitePending, startInviteTransition] = useTransition();
 
   useEffect(() => {
     setRooms(initialRooms);
@@ -157,12 +191,22 @@ export default function WatchTogetherClient({
     setLobbyLoading(true);
     setLobbyError(null);
     try {
-      const res = await getWatchTogetherLobbyDataAction();
+      const [res, invitesRes] = await Promise.all([
+        getWatchTogetherLobbyDataAction(),
+        currentUser ? getWatchRoomInvitationsAction() : Promise.resolve(null),
+      ]);
       if (!res.success) {
         setLobbyError(res.error || "Unable to refresh Watch Together rooms.");
         return;
       }
       setRooms(res.rooms);
+      if (invitesRes && invitesRes.success) {
+        setIncomingInvites(
+          invitesRes.incomingInvitations.filter(
+            (inv) => inv.status === "pending" || inv.status === "accepted"
+          )
+        );
+      }
     } catch (err) {
       setLobbyError(
         err instanceof Error
@@ -172,7 +216,47 @@ export default function WatchTogetherClient({
     } finally {
       setLobbyLoading(false);
     }
-  }, []);
+  }, [currentUser]);
+
+  const refreshHostInviteData = useCallback(
+    async (targetRoomId: string) => {
+      if (!currentUser || !targetRoomId) return;
+      setLoadingHostInvitePanel(true);
+      try {
+        const [friendsRes, invitesRes] = await Promise.all([
+          getFriendsOverviewAction(),
+          getWatchRoomInvitationsAction({ roomId: targetRoomId }),
+        ]);
+        if (friendsRes.success) {
+          setHostFriends(friendsRes.data.friends);
+        }
+        if (invitesRes.success) {
+          setRoomOutgoingInvites(invitesRes.roomOutgoingInvitations);
+        }
+      } catch {
+        /* ignore */
+      } finally {
+        setLoadingHostInvitePanel(false);
+      }
+    },
+    [currentUser]
+  );
+
+  useEffect(() => {
+    if (!currentUser) {
+      setIncomingInvites([]);
+      return;
+    }
+    void getWatchRoomInvitationsAction().then((res) => {
+      if (res.success) {
+        setIncomingInvites(
+          res.incomingInvitations.filter(
+            (inv) => inv.status === "pending" || inv.status === "accepted"
+          )
+        );
+      }
+    });
+  }, [currentUser]);
 
   useEffect(() => {
     const onRoomsUpdated = () => {
@@ -279,7 +363,11 @@ export default function WatchTogetherClient({
     if (verifiedRoomId === activeRoom.id) return;
 
     const isHost = Boolean(currentUser && currentUser.id === activeRoom.hostId);
-    if (activeRoom.privacy === "private" && !isHost) {
+    if (isHost) {
+      void refreshHostInviteData(activeRoom.id);
+    }
+
+    if (activeRoom.privacy === "private" && !isHost && !currentUser) {
       setPendingPrivateRoom(activeRoom);
       return;
     }
@@ -294,6 +382,8 @@ export default function WatchTogetherClient({
           setVerifiedRoomId(activeRoom.id);
           setPendingPrivateRoom(null);
           notifyWatchRoomsUpdated();
+        } else if (activeRoom.privacy === "private" && !isHost) {
+          setPendingPrivateRoom(activeRoom);
         } else {
           setAccessError(res.error || "Unable to join this room.");
           void refreshLobbyRooms();
@@ -311,7 +401,13 @@ export default function WatchTogetherClient({
     return () => {
       cancelled = true;
     };
-  }, [activeRoom, currentUser, verifiedRoomId, refreshLobbyRooms]);
+  }, [
+    activeRoom,
+    currentUser,
+    verifiedRoomId,
+    refreshLobbyRooms,
+    refreshHostInviteData,
+  ]);
 
   const activeRoomId = activeRoom?.id ?? null;
   const activeRoomHostId = activeRoom?.hostId ?? "";
@@ -543,7 +639,7 @@ export default function WatchTogetherClient({
     setJoinBannerError(null);
 
     const isHost = Boolean(currentUser && currentUser.id === room.hostId);
-    if (room.privacy === "private" && !isHost) {
+    if (room.privacy === "private" && !isHost && !currentUser) {
       setPendingPrivateRoom(room);
       setEnteredCode("");
       return;
@@ -553,6 +649,14 @@ export default function WatchTogetherClient({
     try {
       const res = await verifyWatchRoomAccessAction({ roomId: room.id });
       if (!res.authorized) {
+        if (room.privacy === "private" && !isHost) {
+          setPendingPrivateRoom(room);
+          setEnteredCode("");
+          router.push(`/watch-together?room=${encodeURIComponent(room.id)}`, {
+            scroll: false,
+          });
+          return;
+        }
         setJoinBannerError(
           res.error || "This Watch Together room is no longer available."
         );
@@ -571,6 +675,117 @@ export default function WatchTogetherClient({
     } finally {
       setJoiningRoomId(null);
     }
+  };
+
+  const handleSendFriendInvite = (friend: FriendProfileSummaryDTO) => {
+    if (!activeRoom) return;
+    setInviteFeedback(null);
+    setActingInviteKey(friend.id);
+    startInviteTransition(async () => {
+      try {
+        const res = await sendWatchRoomInvitationAction({
+          roomId: activeRoom.id,
+          inviteeUserId: friend.id,
+        });
+        if (!res.success) {
+          setInviteFeedback({
+            type: "error",
+            text: res.error || "Could not send Watch Together invitation.",
+          });
+          return;
+        }
+        setInviteFeedback({
+          type: "success",
+          text:
+            res.message ||
+            `Watch Together invitation sent to @${friend.username}.`,
+        });
+        await refreshHostInviteData(activeRoom.id);
+      } finally {
+        setActingInviteKey(null);
+      }
+    });
+  };
+
+  const handleCancelFriendInvite = (inv: WatchRoomInvitationDTO) => {
+    if (!activeRoom) return;
+    setInviteFeedback(null);
+    setActingInviteKey(inv.id);
+    startInviteTransition(async () => {
+      try {
+        const res = await cancelWatchRoomInvitationAction({
+          invitationId: inv.id,
+        });
+        if (!res.success) {
+          setInviteFeedback({
+            type: "error",
+            text: res.error || "Could not cancel invitation.",
+          });
+          return;
+        }
+        setInviteFeedback({
+          type: "success",
+          text: `Cancelled invitation to @${inv.invitee.username}.`,
+        });
+        await refreshHostInviteData(activeRoom.id);
+      } finally {
+        setActingInviteKey(null);
+      }
+    });
+  };
+
+  const handleAcceptRoomInvitation = (inv: WatchRoomInvitationDTO) => {
+    setJoinBannerError(null);
+    setAccessError(null);
+    setActingInviteKey(inv.id);
+    startInviteTransition(async () => {
+      try {
+        const res = await acceptWatchRoomInvitationAction({
+          invitationId: inv.id,
+        });
+        if (!res.success) {
+          setJoinBannerError(
+            res.error || "Unable to accept Watch Together invitation."
+          );
+          setAccessError(
+            res.error || "Unable to accept Watch Together invitation."
+          );
+          void refreshLobbyRooms();
+          return;
+        }
+        setVerifiedRoomId(inv.roomId);
+        setPendingPrivateRoom(null);
+        notifyWatchRoomsUpdated();
+        router.push(
+          `/watch-together?room=${encodeURIComponent(inv.roomId)}`,
+          { scroll: false }
+        );
+      } finally {
+        setActingInviteKey(null);
+      }
+    });
+  };
+
+  const handleDeclineRoomInvitation = (inv: WatchRoomInvitationDTO) => {
+    setJoinBannerError(null);
+    setActingInviteKey(inv.id);
+    startInviteTransition(async () => {
+      try {
+        const res = await declineWatchRoomInvitationAction({
+          invitationId: inv.id,
+        });
+        if (res.success) {
+          setIncomingInvites((prev) =>
+            prev.filter((item) => item.id !== inv.id)
+          );
+          notifyWatchRoomsUpdated();
+        } else {
+          setJoinBannerError(res.error || "Could not decline invitation.");
+        }
+      } finally {
+        setActingInviteKey(null);
+      }
+    });
   };
 
   const handleLeaveRoom = async () => {
@@ -872,6 +1087,13 @@ export default function WatchTogetherClient({
     }
 
     if (pendingPrivateRoom && verifiedRoomId !== activeRoom.id) {
+      const matchingInvite = incomingInvites.find(
+        (inv) =>
+          inv.roomId === activeRoom.id &&
+          (inv.status === "pending" || inv.status === "accepted") &&
+          (!inviteParam || inv.id === inviteParam || inv.roomId === activeRoom.id)
+      );
+
       return (
         <div className="mx-auto max-w-md rounded-2xl border border-[#1e253d] bg-[#121625] p-6 space-y-5">
           <div className="flex items-center gap-3">
@@ -887,6 +1109,45 @@ export default function WatchTogetherClient({
               </p>
             </div>
           </div>
+
+          {matchingInvite && matchingInvite.status === "pending" && (
+            <div className="rounded-xl border border-primary/40 bg-primary/10 p-3.5 space-y-2.5">
+              <p className="text-xs text-zinc-200">
+                <strong>@{matchingInvite.host.username}</strong> invited you to
+                join this private Watch Together session.
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={
+                    isInvitePending && actingInviteKey === matchingInvite.id
+                  }
+                  onClick={() => handleAcceptRoomInvitation(matchingInvite)}
+                  className="bg-emerald-600 text-xs font-bold text-white hover:bg-emerald-500"
+                >
+                  {isInvitePending && actingInviteKey === matchingInvite.id ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Check className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Accept Invitation &amp; Join
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={
+                    isInvitePending && actingInviteKey === matchingInvite.id
+                  }
+                  onClick={() => handleDeclineRoomInvitation(matchingInvite)}
+                  className="text-xs"
+                >
+                  Decline
+                </Button>
+              </div>
+            </div>
+          )}
 
           <p className="text-sm text-zinc-300">
             <strong>{activeRoom.roomTitle}</strong> requires an invite code to
@@ -1256,6 +1517,25 @@ export default function WatchTogetherClient({
                 <Button
                   type="button"
                   size="sm"
+                  variant="outline"
+                  disabled={isUpdatingRoom}
+                  onClick={() => {
+                    const nextOpen = !inviteModalOpen;
+                    setInviteModalOpen(nextOpen);
+                    setInviteFeedback(null);
+                    if (nextOpen) {
+                      void refreshHostInviteData(activeRoom.id);
+                    }
+                  }}
+                  className="h-7 text-xs border-primary/40 text-primary hover:bg-primary/10"
+                >
+                  <UserPlus className="mr-1.5 h-3.5 w-3.5" />
+                  Invite Friends
+                </Button>
+
+                <Button
+                  type="button"
+                  size="sm"
                   variant="destructive"
                   disabled={isUpdatingRoom}
                   onClick={() =>
@@ -1269,6 +1549,137 @@ export default function WatchTogetherClient({
                   End Room
                 </Button>
               </div>
+            </div>
+          )}
+
+          {isHost && inviteModalOpen && (
+            <div className="rounded-xl border border-[#232b45] bg-[#0d111d] p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-xs font-bold text-white">
+                  <UserPlus className="h-4 w-4 text-primary" />
+                  <span>Invite Accepted Friends to This Room</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setInviteModalOpen(false)}
+                  className="text-zinc-400 hover:text-white"
+                  aria-label="Close friend invite panel"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {inviteFeedback && (
+                <p
+                  className={`text-xs font-medium ${
+                    inviteFeedback.type === "error"
+                      ? "text-rose-300"
+                      : "text-emerald-300"
+                  }`}
+                >
+                  {inviteFeedback.text}
+                </p>
+              )}
+
+              {loadingHostInvitePanel ? (
+                <div className="flex items-center gap-2 py-3 text-xs text-zinc-400">
+                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                  <span>Loading your friends list...</span>
+                </div>
+              ) : hostFriends.length === 0 ? (
+                <p className="text-xs text-zinc-400">
+                  You don&apos;t have any accepted friends yet. Add friends in{" "}
+                  <Link
+                    href="/profile?tab=friends&subtab=search"
+                    className="text-primary underline"
+                  >
+                    your Friends tab
+                  </Link>{" "}
+                  to invite them directly to Watch Together rooms.
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {hostFriends.map((friend) => {
+                    const existingInvite = roomOutgoingInvites.find(
+                      (inv) =>
+                        inv.inviteeId === friend.id &&
+                        (inv.status === "pending" || inv.status === "accepted")
+                    );
+                    const alreadyInRoom = displayedParticipants.some(
+                      (p) => p.userId === friend.id
+                    );
+                    const online = isUserOnline(friend.id, {
+                      isPublicProfile: friend.profileVisibility === "public",
+                      isAcceptedFriend: true,
+                      isBlocked: false,
+                    });
+                    const busy =
+                      isInvitePending &&
+                      (actingInviteKey === friend.id ||
+                        actingInviteKey === existingInvite?.id);
+
+                    return (
+                      <div
+                        key={friend.id}
+                        className="flex items-center justify-between gap-2 rounded-xl border border-[#1c233a] bg-[#121625] px-3 py-2"
+                      >
+                        <div className="min-w-0 flex items-center gap-2">
+                          <span
+                            className={`h-2 w-2 shrink-0 rounded-full ${
+                              online ? "bg-emerald-400" : "bg-zinc-600"
+                            }`}
+                          />
+                          <div className="min-w-0">
+                            <p className="truncate text-xs font-semibold text-white">
+                              {friend.displayName || friend.username}
+                            </p>
+                            <p className="truncate text-[10px] text-zinc-400">
+                              @{friend.username} · {online ? "Online" : "Offline"}
+                            </p>
+                          </div>
+                        </div>
+
+                        {alreadyInRoom ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-300">
+                            <UserCheck className="h-3.5 w-3.5" /> In Room
+                          </span>
+                        ) : existingInvite?.status === "accepted" ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-300">
+                            <Check className="h-3.5 w-3.5" /> Accepted
+                          </span>
+                        ) : existingInvite?.status === "pending" ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() =>
+                              handleCancelFriendInvite(existingInvite)
+                            }
+                            className="h-7 px-2.5 text-[11px]"
+                          >
+                            Cancel Invite
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={
+                              busy ||
+                              liveViewerCount >= activeRoom.maxParticipants
+                            }
+                            onClick={() => handleSendFriendInvite(friend)}
+                            className="h-7 bg-primary px-2.5 text-[11px] text-primary-foreground"
+                          >
+                            <UserPlus className="mr-1 h-3 w-3" />
+                            Invite
+                          </Button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -1845,6 +2256,89 @@ export default function WatchTogetherClient({
             Dismiss
           </Button>
         </div>
+      )}
+
+      {/* Incoming Watch Together Friend Invitations Banner */}
+      {incomingInvites.length > 0 && (
+        <section
+          aria-label="Incoming Watch Together Invitations"
+          className="rounded-2xl border border-primary/35 bg-[#121625] p-4 space-y-3"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-bold text-white">
+              <UserPlus className="h-4 w-4 text-primary" />
+              <span>
+                Friend Invitations to Watch Together ({incomingInvites.length})
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
+            {incomingInvites.map((inv) => {
+              const busy = isInvitePending && actingInviteKey === inv.id;
+              return (
+                <div
+                  key={inv.id}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-[#232b45] bg-[#0d111d] p-3"
+                >
+                  <div className="min-w-0 space-y-0.5">
+                    <p className="truncate text-xs font-bold text-white">
+                      {inv.roomTitle} · {inv.animeTitle} (Ep {inv.episodeNumber})
+                    </p>
+                    <p className="truncate text-[11px] text-zinc-400">
+                      Invited by @{inv.host.username}
+                      {inv.roomPrivacy === "private" ? " · Private Room" : ""}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {inv.status === "accepted" ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() =>
+                          router.push(
+                            `/watch-together?room=${encodeURIComponent(inv.roomId)}`
+                          )
+                        }
+                        className="h-8 rounded-xl bg-primary px-3 text-xs font-bold text-primary-foreground"
+                      >
+                        Enter Room
+                      </Button>
+                    ) : (
+                      <>
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={busy}
+                          onClick={() => handleAcceptRoomInvitation(inv)}
+                          className="h-8 rounded-xl bg-emerald-600 px-3 text-xs font-bold text-white hover:bg-emerald-500"
+                        >
+                          {busy ? (
+                            <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Check className="mr-1 h-3.5 w-3.5" />
+                          )}
+                          Accept
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() => handleDeclineRoomInvitation(inv)}
+                          className="h-8 rounded-xl px-2.5 text-xs"
+                        >
+                          Decline
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
       )}
 
       {lobbyError && (

@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import {
   X,
   User as UserIcon,
+  Users,
   Star,
   MessageSquare,
   MessageCircle,
@@ -42,6 +43,7 @@ export default function Sidebar() {
 
   const MY_ACTIVITY_ITEMS = [
     { label: "My Profile", href: "/profile", icon: UserIcon },
+    { label: "My Friends", href: "/profile?tab=friends", icon: Users },
     { label: "My Reviews", href: "/profile?tab=my-reviews", icon: Star },
     {
       label: "My Discussions",

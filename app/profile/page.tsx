@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { loadUserLibraryBundle } from "@/lib/services/userLibraryServer";
+import { getFriendsOverviewWithClient } from "@/lib/friends/friendsService";
 import ProfileClient, { type ProfilePageData } from "./profile-client";
 
 export const dynamic = "force-dynamic";
@@ -9,16 +10,17 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: "My Profile | Nayozu",
   description:
-    "View and manage your Nayozu profile, username, bio, personal anime and manga libraries, reviews, discussions, and comments.",
+    "View and manage your Nayozu profile, username, bio, friends, personal anime and manga libraries, reviews, discussions, and comments.",
 };
 
 export default async function ProfilePage({
   searchParams,
 }: {
-  searchParams?: Promise<{ tab?: string }>;
+  searchParams?: Promise<{ tab?: string; subtab?: string }>;
 }) {
   const resolvedParams = searchParams ? await searchParams : {};
   const initialTab = resolvedParams?.tab || "watchlist";
+  const initialSubTab = resolvedParams?.subtab || "friends";
 
   const supabase = await createClient();
   const {
@@ -61,6 +63,7 @@ export default async function ProfilePage({
     discussionsRes,
     commentsRes,
     mediaRes,
+    friendsOverviewRes,
   ] = await Promise.all([
     supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
     supabase
@@ -100,6 +103,7 @@ export default async function ProfilePage({
       .from("anime")
       .select("external_id, slug, title_romaji, title_english, media_type")
       .limit(200),
+    getFriendsOverviewWithClient(supabase, user.id),
   ]);
 
   const mediaMap = new Map<
@@ -140,6 +144,8 @@ export default async function ProfilePage({
     createdAt: profileRow?.created_at || user.created_at || null,
     updatedAt: profileRow?.updated_at || null,
     initialTab,
+    initialSubTab,
+    friendsOverview: friendsOverviewRes.data,
     animeWatchlist: libraryBundle.animeWatchlist,
     mangaReadingList: libraryBundle.mangaReadingList,
     favorites: libraryBundle.favorites,

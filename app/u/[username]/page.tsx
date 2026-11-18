@@ -1,6 +1,12 @@
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import {
+  checkIsBlockedBetweenWithClient,
+  findFriendshipBetweenUsersWithClient,
+  resolveFriendshipStatusForViewer,
+  type FriendshipRelationshipStatus,
+} from "@/lib/friends/friendsService";
+import {
   PublicProfileClient,
   type PublicProfileContribution,
 } from "./public-profile-client";
@@ -41,19 +47,46 @@ export default async function PublicProfilePage({
   const isOwner = Boolean(currentUserId && currentUserId === profileRow.id);
   const visibility: "public" | "private" =
     profileRow.profile_visibility === "private" ? "private" : "public";
-  const allowPersonalDetails = visibility === "public" || isOwner;
 
-  // Check if current viewer has blocked this user
+  // Check block and friendship status for current viewer
   let initialBlocked = false;
+  let initialBlockedEitherWay = false;
+  let initialFriendshipStatus: FriendshipRelationshipStatus = isOwner
+    ? "self"
+    : "none";
+  let initialFriendshipId: string | null = null;
+
   if (currentUserId && !isOwner) {
-    const { data: blockRow } = await supabase
-      .from("user_blocks")
-      .select("id")
-      .eq("blocker_id", currentUserId)
-      .eq("blocked_id", profileRow.id)
-      .maybeSingle();
+    const [{ data: blockRow }, blockedEitherWay, friendshipRow] =
+      await Promise.all([
+        supabase
+          .from("user_blocks")
+          .select("id")
+          .eq("blocker_id", currentUserId)
+          .eq("blocked_id", profileRow.id)
+          .maybeSingle(),
+        checkIsBlockedBetweenWithClient(supabase, currentUserId, profileRow.id),
+        findFriendshipBetweenUsersWithClient(
+          supabase,
+          currentUserId,
+          profileRow.id
+        ),
+      ]);
     initialBlocked = Boolean(blockRow);
+    initialBlockedEitherWay = blockedEitherWay;
+    initialFriendshipStatus = resolveFriendshipStatusForViewer({
+      viewerId: currentUserId,
+      targetUserId: profileRow.id,
+      row: friendshipRow,
+      isBlocked: blockedEitherWay,
+    });
+    initialFriendshipId = friendshipRow?.id ?? null;
   }
+
+  const isAcceptedFriend = initialFriendshipStatus === "friends";
+  const allowPersonalDetails =
+    !initialBlockedEitherWay &&
+    (visibility === "public" || isOwner || isAcceptedFriend);
 
   // Load public reviews and discussions (public contributions remain public independently of profile visibility)
   const [{ data: reviews }, { data: ratings }, { data: discussions }, { data: mediaRows }] =
@@ -157,6 +190,9 @@ export default async function PublicProfilePage({
       contributions={contributions}
       currentUserId={currentUserId}
       initialBlocked={initialBlocked}
+      initialBlockedEitherWay={initialBlockedEitherWay}
+      initialFriendshipStatus={initialFriendshipStatus}
+      initialFriendshipId={initialFriendshipId}
     />
   );
 }

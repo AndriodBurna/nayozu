@@ -25,11 +25,11 @@ import {
   Radio,
   Clock,
   Sparkles,
+  UserPlus,
 } from "lucide-react";
-import type { RealtimeChannel } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
 import { useShell } from "@/components/shell-context";
-import { createClient } from "@/lib/supabase/client";
+import FriendActivityFeed from "@/components/friend-activity-feed";
 import { sanitizeRedirectPath } from "@/lib/supabase/proxy";
 import {
   getRightPanelDataAction,
@@ -185,7 +185,13 @@ function SearchParamObserver({
 export default function RightPanel() {
   const router = useRouter();
   const pathname = usePathname();
-  const { user, rightOpen, closeRight } = useShell();
+  const {
+    user,
+    rightOpen,
+    closeRight,
+    publicOnlinePresenceMap,
+    isUserOnline,
+  } = useShell();
 
   const panelRef = useRef<HTMLElement | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -194,15 +200,15 @@ export default function RightPanel() {
   const userInitiatedToggleRef = useRef<boolean>(false);
   const lastFetchedAtRef = useRef<number>(0);
   const lastFetchedUserIdRef = useRef<string | null | undefined>(undefined);
-  const presenceChannelRef = useRef<RealtimeChannel | null>(null);
 
   const [currentSearch, setCurrentSearch] = useState<string>("");
-  const [presenceSubscribed, setPresenceSubscribed] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<RightPanelUserProfileDTO | null>(null);
   const [blockedUserIds, setBlockedUserIds] = useState<string[]>([]);
   const [friends, setFriends] = useState<RightPanelCommunityMemberDTO[]>([]);
+  const [incomingFriendRequestsCount, setIncomingFriendRequestsCount] =
+    useState<number>(0);
   const [activeMembers, setActiveMembers] = useState<
     RightPanelCommunityMemberDTO[]
   >([]);
@@ -210,20 +216,6 @@ export default function RightPanel() {
   const [trendingDiscussions, setTrendingDiscussions] = useState<
     RightPanelTrendingDiscussionDTO[]
   >([]);
-
-  // Live Supabase Realtime presence state (keyed by userId, public profiles only)
-  const [onlinePresenceMap, setOnlinePresenceMap] = useState<
-    Map<
-      string,
-      {
-        userId: string;
-        username: string;
-        displayName: string;
-        avatarUrl: string | null;
-        isPublicProfile: true;
-      }
-    >
-  >(new Map());
 
   // Join Watch Together party state
   const [joiningRoomId, setJoiningRoomId] = useState<string | null>(null);
@@ -246,13 +238,6 @@ export default function RightPanel() {
     }
     return set;
   }, [profile, activeMembers, friends]);
-
-  const blockedSetRef = useRef(blockedSet);
-  const knownPrivateUserIdsRef = useRef(knownPrivateUserIds);
-  useEffect(() => {
-    blockedSetRef.current = blockedSet;
-    knownPrivateUserIdsRef.current = knownPrivateUserIds;
-  }, [blockedSet, knownPrivateUserIds]);
 
   const fetchPanelData = useCallback(
     async (force = false) => {
@@ -279,6 +264,7 @@ export default function RightPanel() {
         setProfile(res.currentUserProfile);
         setBlockedUserIds(res.blockedUserIds);
         setFriends(res.friends);
+        setIncomingFriendRequestsCount(res.incomingFriendRequestsCount ?? 0);
         setActiveMembers(res.activeMembers);
         setWatchRooms(res.watchRooms);
         setTrendingDiscussions(res.trendingDiscussions);
@@ -306,6 +292,7 @@ export default function RightPanel() {
       setProfile(null);
       setBlockedUserIds([]);
       setFriends([]);
+      setIncomingFriendRequestsCount(0);
       setActiveMembers([]);
       setWatchRooms([]);
       setTrendingDiscussions([]);
@@ -325,115 +312,31 @@ export default function RightPanel() {
     void fetchPanelData(false);
   }, [rightOpen, fetchPanelData]);
 
-  // Synchronize Watch Together rooms when lobby or room actions dispatch an update
+  // Synchronize Watch Together rooms and Friends when actions dispatch an update
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const handleWatchRoomsUpdated = () => {
+    const handleDrawerDataUpdated = () => {
       lastFetchedAtRef.current = 0;
       if (rightOpen) {
         void fetchPanelData(true);
       }
     };
-    window.addEventListener("nayozu:watch-rooms-updated", handleWatchRoomsUpdated);
+    window.addEventListener(
+      "nayozu:watch-rooms-updated",
+      handleDrawerDataUpdated
+    );
+    window.addEventListener("nayozu:friends-updated", handleDrawerDataUpdated);
     return () => {
       window.removeEventListener(
         "nayozu:watch-rooms-updated",
-        handleWatchRoomsUpdated
+        handleDrawerDataUpdated
+      );
+      window.removeEventListener(
+        "nayozu:friends-updated",
+        handleDrawerDataUpdated
       );
     };
   }, [rightOpen, fetchPanelData]);
-
-  // 1) Realtime channel subscription lifecycle (separated from profile/presence track updates)
-  useEffect(() => {
-    if (!rightOpen) {
-      presenceChannelRef.current = null;
-      setPresenceSubscribed(false);
-      setOnlinePresenceMap(new Map());
-      return;
-    }
-
-    let isActive = true;
-    const supabase = createClient();
-    const presenceKey =
-      currentUserId || `guest-${Math.random().toString(36).slice(2, 9)}`;
-
-    const channel = supabase.channel("nayozu:presence", {
-      config: {
-        presence: {
-          key: presenceKey,
-        },
-      },
-    });
-    presenceChannelRef.current = channel;
-
-    const syncPresence = () => {
-      if (!isActive) return;
-      const state = channel.presenceState<PresencePayload>();
-      setOnlinePresenceMap(
-        filterPublicPresenceState(state, {
-          blockedSet: blockedSetRef.current,
-          knownPrivateUserIds: knownPrivateUserIdsRef.current,
-        })
-      );
-    };
-
-    channel
-      .on("presence", { event: "sync" }, syncPresence)
-      .on("presence", { event: "join" }, syncPresence)
-      .on("presence", { event: "leave" }, syncPresence)
-      .subscribe((status) => {
-        if (!isActive) return;
-        setPresenceSubscribed(status === "SUBSCRIBED");
-      });
-
-    return () => {
-      isActive = false;
-      presenceChannelRef.current = null;
-      setPresenceSubscribed(false);
-      void supabase.removeChannel(channel);
-    };
-  }, [rightOpen, currentUserId]);
-
-  // 2) Presence tracking lifecycle: only broadcast when profile is loaded and confirmed public
-  useEffect(() => {
-    const channel = presenceChannelRef.current;
-    if (!rightOpen || !presenceSubscribed || !channel) return;
-
-    if (canTrackPublicPresence(user, profile)) {
-      const publicProfile = profile!;
-      void channel
-        .track({
-          userId: user!.id,
-          username: publicProfile.username,
-          displayName: publicProfile.displayName || publicProfile.username,
-          avatarUrl: publicProfile.avatarUrl ?? null,
-          isPublicProfile: true,
-          onlineAt: new Date().toISOString(),
-        })
-        .catch(() => {
-          /* ignore presence track errors */
-        });
-    } else if (!user || (profile && profile.id === user.id && profile.profileVisibility === "private")) {
-      void channel.untrack().catch(() => {
-        /* ignore presence untrack errors */
-      });
-    }
-  }, [rightOpen, presenceSubscribed, user, profile]);
-
-  // Re-filter presence state immediately if blockedSet or knownPrivateUserIds updates
-  useEffect(() => {
-    setOnlinePresenceMap((prev) => {
-      let mutated = false;
-      const next = new Map(prev);
-      for (const uid of next.keys()) {
-        if (blockedSet.has(uid) || knownPrivateUserIds.has(uid)) {
-          next.delete(uid);
-          mutated = true;
-        }
-      }
-      return mutated ? next : prev;
-    });
-  }, [blockedSet, knownPrivateUserIds]);
 
   // Track clicks on any [data-right-panel-trigger="true"] so focus restoration knows which trigger opened/closed the panel
   useEffect(() => {
@@ -624,8 +527,8 @@ export default function RightPanel() {
       RightPanelCommunityMemberDTO & { isOnline: boolean }
     >();
 
-    // First include any confirmed-public user currently online via Realtime presence
-    for (const [uid, pres] of onlinePresenceMap.entries()) {
+    // First include any confirmed-public user currently online via global shell Realtime presence
+    for (const [uid, pres] of publicOnlinePresenceMap.entries()) {
       if (
         uid === currentUserId ||
         blockedSet.has(uid) ||
@@ -641,7 +544,7 @@ export default function RightPanel() {
         avatarUrl: pres.avatarUrl,
         isPublicProfile: true,
         recentActivity: "Online now",
-        lastActiveAt: new Date().toISOString(),
+        lastActiveAt: pres.onlineAt || new Date().toISOString(),
         isOnline: true,
       });
     }
@@ -680,7 +583,7 @@ export default function RightPanel() {
       return tb - ta;
     });
   }, [
-    onlinePresenceMap,
+    publicOnlinePresenceMap,
     activeMembers,
     currentUserId,
     blockedSet,
@@ -692,9 +595,24 @@ export default function RightPanel() {
       .filter((f) => !blockedSet.has(f.id))
       .map((f) => ({
         ...f,
-        isOnline: f.isPublicProfile && onlinePresenceMap.has(f.id),
-      }));
-  }, [friends, blockedSet, onlinePresenceMap]);
+        isOnline: isUserOnline(f.id, {
+          isPublicProfile: f.isPublicProfile,
+          isAcceptedFriend: true,
+          isBlocked: false,
+        }),
+      }))
+      .sort((a, b) => {
+        if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
+        const ta = a.lastActiveAt ? new Date(a.lastActiveAt).getTime() : 0;
+        const tb = b.lastActiveAt ? new Date(b.lastActiveAt).getTime() : 0;
+        return tb - ta;
+      });
+  }, [friends, blockedSet, isUserOnline]);
+
+  const onlineFriendsCount = useMemo(
+    () => onlineFriends.filter((f) => f.isOnline).length,
+    [onlineFriends]
+  );
 
   const handleJoinWatchRoom = async (room: RightPanelWatchRoomDTO) => {
     setJoinError(null);
@@ -930,15 +848,34 @@ export default function RightPanel() {
             <div className="flex items-center gap-1.5 font-semibold text-zinc-200">
               <Users className="h-3.5 w-3.5 text-zinc-400" />
               <span>Friends Online</span>
+              {user && onlineFriends.length > 0 && (
+                <span className="rounded-full bg-emerald-500/15 border border-emerald-500/30 px-1.5 py-0.2 text-[10px] font-bold text-emerald-300">
+                  {onlineFriendsCount}/{onlineFriends.length}
+                </span>
+              )}
             </div>
             <Link
-              href="/community"
+              href={user ? "/profile?tab=friends" : "/community"}
               onClick={closeIfMobile}
               className="text-zinc-400 hover:text-white flex items-center transition-colors"
             >
               See All <ChevronRight className="h-3 w-3 ml-0.5" />
             </Link>
           </div>
+
+          {user && incomingFriendRequestsCount > 0 && (
+            <Link
+              href="/profile?tab=friends&subtab=incoming"
+              onClick={closeIfMobile}
+              className="flex items-center justify-between gap-2 rounded-xl border border-primary/35 bg-primary/10 px-3 py-2 text-xs text-primary hover:bg-primary/15 transition-colors"
+            >
+              <span className="font-semibold">
+                {incomingFriendRequestsCount} pending friend request
+                {incomingFriendRequestsCount === 1 ? "" : "s"}
+              </span>
+              <span className="text-[11px] font-bold underline">Review</span>
+            </Link>
+          )}
 
           {loading && activeMembers.length === 0 && onlineFriends.length === 0 ? (
             <div className="space-y-2.5" aria-label="Loading friends activity">
@@ -1022,7 +959,7 @@ export default function RightPanel() {
             </div>
           ) : onlineFriends.length > 0 ? (
             <div className="space-y-2">
-              {onlineFriends.map((friend) => (
+              {onlineFriends.slice(0, 6).map((friend) => (
                 <div
                   key={friend.id}
                   className="flex items-center gap-3 rounded-xl border border-transparent px-1.5 py-1 hover:border-[#1c2236] hover:bg-[#121624] transition-colors"
@@ -1043,12 +980,12 @@ export default function RightPanel() {
                     ) : (
                       <span>{friend.username.slice(0, 2).toUpperCase()}</span>
                     )}
-                    {friend.isOnline && (
-                      <span
-                        title="Online now"
-                        className="absolute bottom-0 right-0 h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-[#0b0e17]"
-                      />
-                    )}
+                    <span
+                      title={friend.isOnline ? "Online now" : "Offline"}
+                      className={`absolute bottom-0 right-0 h-2 w-2 rounded-full ring-2 ring-[#0b0e17] ${
+                        friend.isOnline ? "bg-emerald-500" : "bg-zinc-600"
+                      }`}
+                    />
                   </Link>
                   <div className="flex-1 min-w-0">
                     <Link
@@ -1060,7 +997,7 @@ export default function RightPanel() {
                     </Link>
                     <p className="truncate text-[11px] text-zinc-400">
                       {friend.recentActivity ||
-                        (friend.isOnline ? "Online" : "Offline")}
+                        (friend.isOnline ? "Online now" : "Offline")}
                     </p>
                   </div>
                 </div>
@@ -1068,13 +1005,29 @@ export default function RightPanel() {
             </div>
           ) : (
             <div className="space-y-2.5">
-              <div className="rounded-xl border border-[#1c2236] bg-[#121624] p-3 text-xs text-zinc-400">
-                <p className="font-medium text-zinc-200">
-                  No friends online right now
-                </p>
-                <p className="mt-0.5 text-[11px] text-zinc-400 leading-relaxed">
-                  You don&apos;t have any friends online at the moment. Explore community discussions or watch parties to connect with fans.
-                </p>
+              <div className="rounded-xl border border-[#1c2236] bg-[#121624] p-3 text-xs text-zinc-400 space-y-2.5">
+                <div>
+                  <p className="font-medium text-zinc-200">
+                    No friends connected yet
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-zinc-400 leading-relaxed">
+                    Add friends to see when they are online or hosting Watch Together parties.
+                  </p>
+                </div>
+                <Button
+                  asChild
+                  size="sm"
+                  variant="outline"
+                  className="w-full h-8 border-[#232a42] bg-[#161b2d] text-xs font-semibold text-zinc-200 hover:bg-[#1f263e] hover:text-white"
+                >
+                  <Link
+                    href="/profile?tab=friends&subtab=search"
+                    onClick={closeIfMobile}
+                  >
+                    <UserPlus className="h-3.5 w-3.5 mr-1.5 text-primary" />
+                    Find Friends
+                  </Link>
+                </Button>
               </div>
 
               {displayedCommunityMembers.length > 0 && (
@@ -1133,6 +1086,30 @@ export default function RightPanel() {
             </div>
           )}
         </section>
+
+        {/* Recent Friend Activity (Authenticated Users with Friends) */}
+        {user && onlineFriends.length > 0 && (
+          <section aria-label="Friend Activity" className="space-y-2.5">
+            <div className="flex items-center justify-between text-xs">
+              <div className="flex items-center gap-1.5 font-semibold text-zinc-200">
+                <Sparkles className="h-3.5 w-3.5 text-primary" />
+                <span>Friend Activity</span>
+              </div>
+              <Link
+                href="/profile?tab=friends&subtab=activity"
+                onClick={closeIfMobile}
+                className="text-zinc-400 hover:text-white flex items-center transition-colors"
+              >
+                See All <ChevronRight className="h-3 w-3 ml-0.5" />
+              </Link>
+            </div>
+            <FriendActivityFeed
+              compact
+              pageSize={3}
+              onItemNavigate={closeIfMobile}
+            />
+          </section>
+        )}
 
         {/* Watch Together Widget */}
         <section aria-label="Watch Together" className="space-y-3">

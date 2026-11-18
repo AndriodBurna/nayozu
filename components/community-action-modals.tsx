@@ -312,6 +312,9 @@ export function BlockUserButton({
         }
         setBlocked(false);
         onBlockedChange?.(false);
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("nayozu:friends-updated"));
+        }
       } else {
         const res = await blockUserAction({ blockedUserId: targetUserId });
         if (!res.success) {
@@ -320,6 +323,9 @@ export function BlockUserButton({
         }
         setBlocked(true);
         onBlockedChange?.(true);
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("nayozu:friends-updated"));
+        }
       }
     });
   };

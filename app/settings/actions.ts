@@ -20,6 +20,7 @@ export interface UserPreferences {
   reducedMotion: boolean;
   defaultSpoilerProtection: boolean;
   showActivityInCommunity: boolean;
+  shareLibraryActivityWithFriends?: boolean;
   notifyEpisodeReleases: boolean;
   notifyCommunityReplies: boolean;
   notifyWatchTogetherInvites: boolean;
@@ -85,6 +86,7 @@ const DEFAULT_PREFERENCES: UserPreferences = {
   reducedMotion: false,
   defaultSpoilerProtection: true,
   showActivityInCommunity: true,
+  shareLibraryActivityWithFriends: true,
   notifyEpisodeReleases: true,
   notifyCommunityReplies: true,
   notifyWatchTogetherInvites: true,
@@ -125,6 +127,10 @@ function sanitizePreferences(raw: unknown): UserPreferences {
       typeof obj.showActivityInCommunity === "boolean"
         ? obj.showActivityInCommunity
         : DEFAULT_PREFERENCES.showActivityInCommunity,
+    shareLibraryActivityWithFriends:
+      typeof obj.shareLibraryActivityWithFriends === "boolean"
+        ? obj.shareLibraryActivityWithFriends
+        : DEFAULT_PREFERENCES.shareLibraryActivityWithFriends,
     notifyEpisodeReleases:
       typeof obj.notifyEpisodeReleases === "boolean"
         ? obj.notifyEpisodeReleases
@@ -488,7 +494,25 @@ export async function updateUserPreferencesAction(
     };
   }
 
+  // Sync activity sharing & Watch Together invite notification flags to public.profiles
+  try {
+    await supabase
+      .from("profiles")
+      .update({
+        share_activity_with_friends: nextPrefs.showActivityInCommunity,
+        share_library_activity_with_friends:
+          nextPrefs.shareLibraryActivityWithFriends !== false,
+        notify_watch_together_invites: nextPrefs.notifyWatchTogetherInvites,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", user.id);
+  } catch {
+    // Non-fatal
+  }
+
   revalidatePath("/settings");
+  revalidatePath("/community");
+  revalidatePath("/profile");
   return {
     success: true,
     message: "Preferences saved to your account.",

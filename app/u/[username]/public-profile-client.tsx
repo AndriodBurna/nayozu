@@ -16,6 +16,9 @@ import {
   BlockUserButton,
   ReportContentModal,
 } from "@/components/community-action-modals";
+import { FriendActionButton } from "@/components/friends-manager";
+import { useShell } from "@/components/shell-context";
+import type { FriendshipRelationshipStatus } from "@/lib/friends/friendsService";
 
 export interface PublicProfileContribution {
   id: string;
@@ -34,6 +37,9 @@ export function PublicProfileClient({
   contributions,
   currentUserId,
   initialBlocked,
+  initialBlockedEitherWay = false,
+  initialFriendshipStatus = "none",
+  initialFriendshipId = null,
 }: {
   profile: {
     id: string;
@@ -48,12 +54,37 @@ export function PublicProfileClient({
   contributions: PublicProfileContribution[];
   currentUserId: string | null;
   initialBlocked: boolean;
+  initialBlockedEitherWay?: boolean;
+  initialFriendshipStatus?: FriendshipRelationshipStatus;
+  initialFriendshipId?: string | null;
 }) {
+  const { isUserOnline } = useShell();
   const [reportOpen, setReportOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"reviews" | "discussions">("reviews");
+  const [blocked, setBlocked] = useState(initialBlocked);
+  const [friendshipStatus, setFriendshipStatus] =
+    useState<FriendshipRelationshipStatus>(initialFriendshipStatus);
 
+  const isAcceptedFriend = friendshipStatus === "friends";
+  const isBlockedActive = blocked || initialBlockedEitherWay;
   const isPrivateToViewer =
-    profile.profileVisibility === "private" && !profile.isOwner;
+    profile.profileVisibility === "private" &&
+    !profile.isOwner &&
+    !isAcceptedFriend;
+
+  const canSeeOnlinePresence =
+    !isBlockedActive &&
+    (profile.profileVisibility === "public" ||
+      profile.isOwner ||
+      isAcceptedFriend);
+
+  const isOnline =
+    canSeeOnlinePresence &&
+    isUserOnline(profile.id, {
+      isPublicProfile: profile.profileVisibility === "public",
+      isAcceptedFriend,
+      isBlocked: isBlockedActive,
+    });
 
   const reviews = contributions.filter((c) => c.kind === "review");
   const discussions = contributions.filter((c) => c.kind !== "review");
@@ -85,6 +116,22 @@ export function PublicProfileClient({
                 <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-0.5 text-xs font-semibold text-slate-300">
                   @{profile.username}
                 </span>
+                {canSeeOnlinePresence && (
+                  <span
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${
+                      isOnline
+                        ? "border-emerald-500/35 bg-emerald-500/15 text-emerald-300"
+                        : "border-white/10 bg-white/[0.04] text-slate-400"
+                    }`}
+                  >
+                    <span
+                      className={`h-2 w-2 rounded-full ${
+                        isOnline ? "bg-emerald-400" : "bg-slate-500"
+                      }`}
+                    />
+                    {isOnline ? "Online" : "Offline"}
+                  </span>
+                )}
                 {profile.profileVisibility === "private" && (
                   <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/10 px-2.5 py-0.5 text-[11px] font-bold text-amber-300">
                     <Lock className="h-3 w-3" />
@@ -131,10 +178,28 @@ export function PublicProfileClient({
             ) : (
               currentUserId && (
                 <>
+                  <FriendActionButton
+                    targetUserId={profile.id}
+                    targetUsername={profile.username}
+                    initialStatus={friendshipStatus}
+                    initialFriendshipId={initialFriendshipId}
+                    isBlocked={isBlockedActive}
+                    onStatusChange={(nextStatus) =>
+                      setFriendshipStatus(nextStatus)
+                    }
+                  />
                   <BlockUserButton
                     targetUserId={profile.id}
                     targetUsername={profile.username}
-                    initialBlocked={initialBlocked}
+                    initialBlocked={blocked}
+                    onBlockedChange={(nextBlocked) => {
+                      setBlocked(nextBlocked);
+                      if (nextBlocked) {
+                        setFriendshipStatus("blocked");
+                      } else {
+                        setFriendshipStatus("none");
+                      }
+                    }}
                   />
                   <button
                     type="button"

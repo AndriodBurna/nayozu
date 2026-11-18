@@ -28,7 +28,10 @@ const VALID_ACCENTS: readonly AccentColorId[] = [
 
 const VALID_THEME_MODES: readonly ThemeModeId[] = ["dark", "light", "system"];
 
-function extractPreferences(raw: unknown): UserPreferences {
+function extractPreferences(
+  raw: unknown,
+  profileRow?: Record<string, unknown> | null
+): UserPreferences {
   const obj =
     raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
 
@@ -46,8 +49,16 @@ function extractPreferences(raw: unknown): UserPreferences {
         ? obj.defaultSpoilerProtection
         : true,
     showActivityInCommunity:
-      typeof obj.showActivityInCommunity === "boolean"
+      typeof profileRow?.share_activity_with_friends === "boolean"
+        ? profileRow.share_activity_with_friends
+        : typeof obj.showActivityInCommunity === "boolean"
         ? obj.showActivityInCommunity
+        : true,
+    shareLibraryActivityWithFriends:
+      typeof profileRow?.share_library_activity_with_friends === "boolean"
+        ? profileRow.share_library_activity_with_friends
+        : typeof obj.shareLibraryActivityWithFriends === "boolean"
+        ? obj.shareLibraryActivityWithFriends
         : true,
     notifyEpisodeReleases:
       typeof obj.notifyEpisodeReleases === "boolean"
@@ -58,7 +69,9 @@ function extractPreferences(raw: unknown): UserPreferences {
         ? obj.notifyCommunityReplies
         : true,
     notifyWatchTogetherInvites:
-      typeof obj.notifyWatchTogetherInvites === "boolean"
+      typeof profileRow?.notify_watch_together_invites === "boolean"
+        ? profileRow.notify_watch_together_invites
+        : typeof obj.notifyWatchTogetherInvites === "boolean"
         ? obj.notifyWatchTogetherInvites
         : true,
   };
@@ -114,7 +127,10 @@ export default async function SettingsPage() {
   ]);
 
   const profileRow = profileRes.data;
-  const preferences = extractPreferences(user.user_metadata?.preferences);
+  const preferences = extractPreferences(
+    user.user_metadata?.preferences,
+    profileRow
+  );
 
   const initialData: ProfileSettingsData = {
     id: user.id,

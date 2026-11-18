@@ -130,6 +130,7 @@ const DEFAULT_GUEST_PREFS: UserPreferences = {
   reducedMotion: false,
   defaultSpoilerProtection: true,
   showActivityInCommunity: true,
+  shareLibraryActivityWithFriends: true,
   notifyEpisodeReleases: true,
   notifyCommunityReplies: true,
   notifyWatchTogetherInvites: true,
@@ -208,6 +209,11 @@ export default function SettingsClient({ initialData }: SettingsClientProps) {
         type: "success",
         text: res.message || `Profile visibility updated to ${nextVis}.`,
       });
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("nayozu:presence-metadata-updated")
+        );
+      }
       router.refresh();
     });
   }
@@ -228,6 +234,9 @@ export default function SettingsClient({ initialData }: SettingsClientProps) {
         type: "success",
         text: "User has been unblocked.",
       });
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("nayozu:friends-updated"));
+      }
       router.refresh();
     });
   }
@@ -1559,21 +1568,21 @@ export default function SettingsClient({ initialData }: SettingsClientProps) {
                     </button>
                   </div>
 
-                  {/* Working Toggle 2: Community Activity Preference */}
+                  {/* Working Toggle 2: Community & Friend Activity Preference */}
                   <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/5 bg-[#151a2a] p-4">
                     <div className="space-y-0.5">
                       <div className="flex items-center gap-2">
                         <p className="text-xs font-bold text-white">
-                          Display Active Status in Community &amp; Watch
-                          Together
+                          Share Activity in Friend Feed &amp; Community
                         </p>
                         <span className="rounded-md bg-primary/15 px-2 py-0.5 text-[10px] font-semibold text-primary">
                           Persisted
                         </span>
                       </div>
                       <p className="text-[11px] text-zinc-400">
-                        Allow your profile badge to appear in the community
-                        sidebar when participating in public rooms.
+                        Allow your accepted friends to see your reviews,
+                        discussions, and public Watch Together sessions in their
+                        Friend Activity Feed.
                       </p>
                     </div>
                     <button
@@ -1605,34 +1614,57 @@ export default function SettingsClient({ initialData }: SettingsClientProps) {
                     </button>
                   </div>
 
-                  {/* Honest Unavailable Feature: Private Profile Mode */}
-                  <div className="flex items-start justify-between gap-4 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 opacity-90">
-                    <div className="space-y-1">
+                  {/* Working Toggle 3: Library Watching/Reading Progress Sharing with Accepted Friends */}
+                  <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/5 bg-[#151a2a] p-4">
+                    <div className="space-y-0.5">
                       <div className="flex items-center gap-2">
-                        <p className="text-xs font-bold text-zinc-200">
-                          Private Profile &amp; Hidden Reviews Mode
+                        <p className="text-xs font-bold text-white">
+                          Share Watching &amp; Reading Progress with Accepted
+                          Friends
                         </p>
-                        <span className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
-                          Requires Schema Migration
+                        <span className="rounded-md bg-primary/15 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                          Persisted
                         </span>
                       </div>
-                      <p className="text-[11px] text-zinc-400 leading-relaxed">
-                        The current database schema defines{" "}
-                        <code>public.profiles</code>,{" "}
-                        <code>public.anime_reviews</code>, and{" "}
-                        <code>public.anime_comments</code> with public{" "}
-                        <code>SELECT</code> RLS policies so community threads
-                        can resolve author attribution. Hiding public profiles
-                        requires adding an <code>is_private</code> column and
-                        updating RLS policies.
+                      <p className="text-[11px] text-zinc-400">
+                        When enabled, your accepted friends can see when you
+                        start, update progress on, or complete an anime or manga
+                        title. Non-friends can never access your library
+                        activity, and planned/dropped/on-hold lists remain
+                        private.
                       </p>
                     </div>
                     <button
                       type="button"
-                      disabled
-                      className="shrink-0 cursor-not-allowed rounded-xl border border-white/10 bg-zinc-800/70 px-3 py-1.5 text-[11px] font-semibold text-zinc-500"
+                      role="switch"
+                      aria-checked={
+                        prefs.showActivityInCommunity &&
+                        prefs.shareLibraryActivityWithFriends !== false
+                      }
+                      disabled={isPending || !prefs.showActivityInCommunity}
+                      onClick={() =>
+                        handleTogglePreference(
+                          "shareLibraryActivityWithFriends",
+                          prefs.shareLibraryActivityWithFriends === false
+                        )
+                      }
+                      className={cn(
+                        "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors disabled:opacity-50",
+                        prefs.showActivityInCommunity &&
+                          prefs.shareLibraryActivityWithFriends !== false
+                          ? "bg-primary"
+                          : "bg-zinc-700"
+                      )}
                     >
-                      Public Only
+                      <span
+                        className={cn(
+                          "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition",
+                          prefs.showActivityInCommunity &&
+                            prefs.shareLibraryActivityWithFriends !== false
+                            ? "translate-x-5"
+                            : "translate-x-0"
+                        )}
+                      />
                     </button>
                   </div>
                 </div>
